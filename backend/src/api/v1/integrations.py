@@ -4,10 +4,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.config import settings
 from src.core.database import get_db_session
-from src.core.rbac import AuthContext, require_role
-from src.models.auth import OrgRole
+from src.core.rbac import AuthContext, Permission, require_permission
 from src.schemas.integrations import (
     FigmaLinkCreate,
     FigmaLinkResponse,
@@ -29,19 +29,12 @@ async def github_webhook_receiver(
 ) -> dict:
     """Public webhook endpoint receiving GitHub events (push, pull_request, etc.)."""
     raw_body = await request.body()
-
-    # Always verify the HMAC signature except under the automated test suite.
     if settings.ENVIRONMENT != "test":
-        if not verify_github_signature(
-            raw_body, settings.GITHUB_WEBHOOK_SECRET, x_hub_signature_256
-        ):
+        if not verify_github_signature(raw_body, settings.GITHUB_WEBHOOK_SECRET, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid GitHub HMAC signature")
-
     payload = await request.json()
-    service = GitHubService(db)
-    result = await service.process_webhook(
-        event_type=x_github_event or "generic",
-        payload=payload,
+    result = await GitHubService(db).process_webhook(
+        event_type=x_github_event or "generic", payload=payload
     )
     return {"success": True, "result": result}
 
@@ -54,15 +47,11 @@ async def github_webhook_receiver(
 async def connect_github_repo(
     project_id: str,
     payload: GitHubIntegrationCreate,
-    ctx: Annotated[AuthContext, Depends(require_role(OrgRole.PROJECT_MANAGER))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.INTEGRATION_MANAGE))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> GitHubIntegrationResponse:
-    """Connect a GitHub repository to a project for automated PR/commit status transitions."""
-    service = GitHubService(db)
-    return await service.connect_repository(
-        org_id=ctx.org_id,
-        project_id=project_id,
-        payload=payload,
+    return await GitHubService(db).connect_repository(
+        org_id=ctx.org_id, project_id=project_id, payload=payload
     )
 
 
@@ -72,27 +61,18 @@ async def connect_github_repo(
 async def attach_figma_frame(
     task_id: str,
     payload: FigmaLinkCreate,
-    ctx: Annotated[AuthContext, Depends(require_role(OrgRole.MEMBER))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TASK_UPDATE))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> FigmaLinkResponse:
-    """Attach a Figma design frame or file link to a task."""
-    service = FigmaService(db)
-    return await service.attach_figma_link(
-        org_id=ctx.org_id,
-        task_id=task_id,
-        payload=payload,
+    return await FigmaService(db).attach_figma_link(
+        org_id=ctx.org_id, task_id=task_id, payload=payload
     )
 
 
 @router.get("/tasks/{task_id}/figma", response_model=list[FigmaLinkResponse])
 async def list_task_figma_frames(
     task_id: str,
-    ctx: Annotated[AuthContext, Depends(require_role(OrgRole.GUEST))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TASK_READ))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[FigmaLinkResponse]:
-    """List all attached Figma frames for a task."""
-    service = FigmaService(db)
-    return await service.list_task_figma_links(
-        org_id=ctx.org_id,
-        task_id=task_id,
-    )
+    return await FigmaService(db).list_task_figma_links(org_id=ctx.org_id, task_id=task_id)

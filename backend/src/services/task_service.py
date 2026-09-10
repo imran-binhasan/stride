@@ -1,17 +1,19 @@
-"""Task and Dependency business logic with Acyclicity validation."""
+"""Task, Comment, Dependency, and Attachment business logic."""
 
 from collections import defaultdict
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.core.exceptions import ConflictException, EntityNotFoundException, ValidationException
 from src.repositories.project_repo import ProjectRepository
 from src.repositories.task_repo import TaskRepository
 from src.repositories.user_repo import UserRepository
 from src.schemas.task import (
+    AttachmentResponse,
+    CommentCreate,
+    CommentResponse,
     DependencyCreate,
     DependencyResponse,
-    SubtaskCreate,
-    SubtaskResponse,
     TaskCreate,
     TaskMoveRequest,
     TaskResponse,
@@ -27,7 +29,6 @@ class TaskService:
         self.user_repo = UserRepository(db)
 
     async def _validate_assignee(self, org_id: str, assignee_id: str | None) -> None:
-        """Ensure an assignee (if given) is a member of the acting organization."""
         if assignee_id is None:
             return
         membership = await self.user_repo.get_org_membership(org_id=org_id, user_id=assignee_id)
@@ -51,7 +52,6 @@ class TaskService:
 
         await self._validate_assignee(org_id, payload.assignee_id)
 
-        # Atomic DB-side increment prevents duplicate short_ids under concurrent creates.
         new_counter = await self.project_repo.increment_task_counter(project.id)
         short_id = f"{project.key}-{new_counter}"
 
@@ -62,13 +62,17 @@ class TaskService:
             title=payload.title,
             status_id=target_status_id,
             creator_id=creator_id,
+            task_type=payload.type,
             description=payload.description,
             sprint_id=payload.sprint_id,
+            parent_task_id=payload.parent_task_id,
             priority=payload.priority,
             story_points=payload.story_points,
             estimated_hours=payload.estimated_hours,
+            start_date=payload.start_date,
             due_date=payload.due_date,
             assignee_id=payload.assignee_id,
+            is_client_ticket=payload.is_client_ticket,
             custom_fields=payload.custom_fields,
         )
         fresh_task = await self.task_repo.get_by_id(task.id, org_id=org_id)
@@ -101,6 +105,27 @@ class TaskService:
         )
         return [TaskResponse.model_validate(t) for t in tasks]
 
+    async def update_task(self, task_id: str, org_id: str, payload: TaskUpdate) -> TaskResponse:
+        task = await self.task_repo.get_by_id(task_id, org_id=org_id)
+        if not task:
+            raise EntityNotFoundException("Task", task_id)
+
+        if payload.status_id is not None:
+            status_obj = await self.project_repo.get_status_by_id(payload.status_id)
+            if not status_obj or status_obj.project_id != task.project_id:
+                raise ValidationException("Target status does not belong to this project")
+        await self._validate_assignee(org_id, payload.assignee_id)
+
+        for field, value in payload.model_dump(exclude_none=True).items():
+            if field == "custom_fields" and value is not None:
+                task.custom_fields = {**task.custom_fields, **value}
+            else:
+                setattr(task, field, value)
+
+        await self.db.flush()
+        fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
+        return TaskResponse.model_validate(fresh)
+
     async def move_task(self, task_id: str, org_id: str, payload: TaskMoveRequest) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id, org_id=org_id)
         if not task:
@@ -117,59 +142,37 @@ class TaskService:
         fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
         return TaskResponse.model_validate(fresh)
 
-    async def update_task(self, task_id: str, org_id: str, payload: TaskUpdate) -> TaskResponse:
+    # ── Comments ──────────────────────────────────────────────────────────────
+
+    async def add_comment(
+        self, task_id: str, org_id: str, author_id: str, payload: CommentCreate
+    ) -> CommentResponse:
         task = await self.task_repo.get_by_id(task_id, org_id=org_id)
         if not task:
             raise EntityNotFoundException("Task", task_id)
 
-        if payload.status_id is not None:
-            status_obj = await self.project_repo.get_status_by_id(payload.status_id)
-            if not status_obj or status_obj.project_id != task.project_id:
-                raise ValidationException("Target status does not belong to this project")
-        await self._validate_assignee(org_id, payload.assignee_id)
-
-        if payload.title is not None:
-            task.title = payload.title
-        if payload.description is not None:
-            task.description = payload.description
-        if payload.status_id is not None:
-            task.status_id = payload.status_id
-        if payload.priority is not None:
-            task.priority = payload.priority
-        if payload.story_points is not None:
-            task.story_points = payload.story_points
-        if payload.estimated_hours is not None:
-            task.estimated_hours = payload.estimated_hours
-        if payload.due_date is not None:
-            task.due_date = payload.due_date
-        if payload.assignee_id is not None:
-            task.assignee_id = payload.assignee_id
-        if payload.custom_fields is not None:
-            task.custom_fields = {**task.custom_fields, **payload.custom_fields}
-
-        await self.db.flush()
-        fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
-        return TaskResponse.model_validate(fresh)
-
-    async def add_subtask(
-        self, task_id: str, org_id: str, payload: SubtaskCreate
-    ) -> SubtaskResponse:
-        task = await self.task_repo.get_by_id(task_id, org_id=org_id)
-        if not task:
-            raise EntityNotFoundException("Task", task_id)
-
-        subtask = await self.task_repo.add_subtask(
+        comment = await self.task_repo.add_comment(
             task_id=task_id,
-            title=payload.title,
-            position=payload.position,
+            author_id=author_id,
+            content=payload.content,
+            is_internal=payload.is_internal,
+            parent_comment_id=payload.parent_comment_id,
         )
-        return SubtaskResponse.model_validate(subtask)
+        return CommentResponse.model_validate(comment)
+
+    async def delete_comment(self, comment_id: str, org_id: str, user_id: str, can_delete_any: bool) -> dict:
+        comment = await self.task_repo.get_comment_by_id(comment_id)
+        if not comment:
+            raise EntityNotFoundException("Comment", comment_id)
+        if not can_delete_any and comment.author_id != user_id:
+            raise ValidationException("You can only delete your own comments")
+        await self.task_repo.delete_comment(comment_id)
+        return {"success": True, "deleted_comment_id": comment_id}
+
+    # ── Dependencies ──────────────────────────────────────────────────────────
 
     async def add_dependency(
-        self,
-        task_id: str,
-        org_id: str,
-        payload: DependencyCreate,
+        self, task_id: str, org_id: str, payload: DependencyCreate
     ) -> DependencyResponse:
         if task_id == payload.successor_id:
             raise ConflictException("A task cannot depend on itself")
@@ -201,11 +204,9 @@ class TaskService:
 
     async def _verify_no_cycles(self, project_id: str, new_pred_id: str, new_succ_id: str) -> None:
         existing_deps = await self.task_repo.get_dependency_graph(project_id)
-
         graph: dict[str, list[str]] = defaultdict(list)
         for dep in existing_deps:
             graph[dep.predecessor_id].append(dep.successor_id)
-
         graph[new_pred_id].append(new_succ_id)
 
         visited: set[str] = set()
@@ -221,6 +222,4 @@ class TaskService:
             return False
 
         if dfs(new_succ_id):
-            raise ConflictException(
-                "Adding this dependency creates a circular blocking cycle (deadlock)"
-            )
+            raise ConflictException("Adding this dependency creates a circular blocking cycle")

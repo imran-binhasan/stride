@@ -1,34 +1,47 @@
-"""Pydantic v2 schemas for Tasks, Subtasks, Dependencies, and Custom Fields."""
+"""Pydantic v2 schemas for Tasks, Comments, Attachments, and Dependencies."""
 
 from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from src.models.task import DependencyType, TaskPriority
+
+from src.models.task import DependencyType, TaskPriority, TaskType
 from src.schemas.auth import UserProfileResponse
 from src.schemas.project import WorkflowStatusResponse
 
 
-class SubtaskResponse(BaseModel):
+class CommentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
     task_id: str
-    title: str
-    is_completed: bool
-    position: int
+    author_id: str
+    content: str
+    is_internal: bool
+    parent_comment_id: str | None
+    author: UserProfileResponse | None = None
     created_at: datetime
+    updated_at: datetime
 
 
-class SubtaskCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-    position: int = 0
+class CommentCreate(BaseModel):
+    content: str = Field(min_length=1)
+    is_internal: bool = False
+    parent_comment_id: str | None = None
 
 
-class SubtaskUpdate(BaseModel):
-    title: str | None = None
-    is_completed: bool | None = None
-    position: int | None = None
+class AttachmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    task_id: str
+    comment_id: str | None
+    uploaded_by_id: str
+    file_name: str
+    file_size: int
+    mime_type: str
+    storage_key: str
+    created_at: datetime
 
 
 class DependencyResponse(BaseModel):
@@ -48,6 +61,13 @@ class DependencyCreate(BaseModel):
     lag_days: int = 0
 
 
+class TaskAssigneeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: str
+    user: UserProfileResponse | None = None
+
+
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,15 +76,19 @@ class TaskResponse(BaseModel):
     project_id: str
     sprint_id: str | None
     status_id: str
+    parent_task_id: str | None
     short_id: str
     title: str
     description: str | None
+    type: TaskType
     priority: TaskPriority
     story_points: float | None
     estimated_hours: float | None
+    start_date: date | None
     due_date: date | None
     position: int
     custom_fields: dict[str, Any] = {}
+    is_client_ticket: bool
     creator_id: str
     assignee_id: str | None
     created_at: datetime
@@ -72,35 +96,46 @@ class TaskResponse(BaseModel):
 
     status: WorkflowStatusResponse | None = None
     assignee: UserProfileResponse | None = None
-    subtasks: list[SubtaskResponse] = []
+    assignees: list[TaskAssigneeResponse] = []
+    children: list["TaskResponse"] = []
     dependencies_out: list[DependencyResponse] = []
     dependencies_in: list[DependencyResponse] = []
+    comments: list[CommentResponse] = []
+    attachments: list[AttachmentResponse] = []
 
 
 class TaskCreate(BaseModel):
     project_id: str
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
+    type: TaskType = TaskType.TASK
     status_id: str | None = None
     sprint_id: str | None = None
+    parent_task_id: str | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
     story_points: float | None = None
     estimated_hours: float | None = None
+    start_date: date | None = None
     due_date: date | None = None
     assignee_id: str | None = None
+    is_client_ticket: bool = False
     custom_fields: dict[str, Any] = {}
 
 
 class TaskUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    type: TaskType | None = None
     status_id: str | None = None
     sprint_id: str | None = None
+    parent_task_id: str | None = None
     priority: TaskPriority | None = None
     story_points: float | None = None
     estimated_hours: float | None = None
+    start_date: date | None = None
     due_date: date | None = None
     assignee_id: str | None = None
+    is_client_ticket: bool | None = None
     custom_fields: dict[str, Any] | None = None
 
 
