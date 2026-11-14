@@ -1,6 +1,6 @@
 """Integration tests for Time Tracking, Active Timers, Telemetry, Screenshots, and Daily Reports."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -66,7 +66,7 @@ async def test_time_tracking_full_lifecycle_and_daily_report(client: AsyncClient
         json={
             "time_entry_id": time_entry_id,
             "period_start": now,
-            "period_end": now,
+            "period_end": (datetime.fromisoformat(now) + timedelta(seconds=30)).isoformat(),
             "keystroke_count": 35,
             "mouse_distance_px": 550,
             "active_window_title": "VS Code",
@@ -118,4 +118,5 @@ async def test_time_tracking_full_lifecycle_and_daily_report(client: AsyncClient
     assert len(report["ten_minute_blocks"]) >= 1
     first_block = report["ten_minute_blocks"][0]
     assert first_block["activity_percent"] > 0.0
-    assert first_block["screenshot_url"] == s3_key
+    assert s3_key in first_block["screenshot_url"]
+    assert "X-Amz-Signature" in first_block["screenshot_url"]

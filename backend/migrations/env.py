@@ -9,7 +9,17 @@ from sqlalchemy.pool import NullPool
 from src.config import settings
 
 # Import every model module so all tables register on Base.metadata.
-from src.models import auth, integrations, project, task, time_tracking  # noqa: F401
+from src.models import (  # noqa: F401
+    auth,
+    billing,
+    client,
+    hr,
+    integrations,
+    notifications,
+    project,
+    task,
+    time_tracking,
+)
 from src.models.base import Base
 
 config = context.config
@@ -18,7 +28,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Inject the application's database URL (async driver) into Alembic's config.
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

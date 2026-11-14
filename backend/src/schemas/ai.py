@@ -72,7 +72,7 @@ class Gate4TDDResponse(BaseModel):
 
 class Gate5ExecutionRequest(BaseModel):
     feature_title: str
-    test_module_code: str
+    test_module_code: str = Field(max_length=100000)
 
 
 class Gate5ExecutionResponse(BaseModel):
@@ -80,7 +80,8 @@ class Gate5ExecutionResponse(BaseModel):
     static_analysis_passed: bool = True
     tests_executed: int
     tests_passed: int
-    coverage_percent: float
+    coverage_percent: float | None = Field(default=None, ge=0, le=100)
+    execution_status: str = "not_run"
     summary: str
 
 

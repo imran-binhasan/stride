@@ -3,7 +3,6 @@
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-
 from src.models.hr import EmploymentType, LeaveStatus, LeaveType, PayItemStatus, PayrollStatus
 
 

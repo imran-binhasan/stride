@@ -19,6 +19,9 @@ import {
 import { api } from "./services/api";
 import { useRealtime } from "./hooks/useRealtime";
 import { X } from "lucide-react";
+import { TablePage } from "./pages/TablePage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { MyOrg, Workspace, OrgMember } from "./types";
 
 export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(!!api.getToken());
@@ -26,6 +29,17 @@ export const App: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [currentTab, setCurrentTab] = useState<ViewTab>("kanban");
+
+  const [organizations, setOrganizations] = useState<MyOrg[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [revision, setRevision] = useState(0);
+  const [error, setError] = useState("");
+  const [initializing, setInitializing] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const activeOrg = organizations.find(org => org.id === api.getOrgId()) || null;
+  const canManage = !!activeOrg && ["ORG_OWNER", "ORG_ADMIN", "MANAGER"].includes(activeOrg.role);
+  const canEdit = activeOrg?.role !== "CLIENT";
 
   // View States
   const [kanbanBoard, setKanbanBoard] = useState<KanbanBoard | null>(null);
@@ -44,49 +58,41 @@ export const App: React.FC = () => {
   const [newTaskPoints, setNewTaskPoints] = useState("3");
   const [newTaskDueDate, setNewTaskDueDate] = useState("");
 
-  const refreshUserAndProjects = async () => {
+  const refreshUserAndProjects = async (chosenOrg?: string) => {
+    setError("");
     try {
-      const me = await api.getMe();
-      setUser(me);
-
-      // Resolve the active organization and its first workspace from the API
-      // (the org id also travels as a JWT claim, so requests are always scoped).
+      setUser(await api.getMe());
       const orgs = await api.listMyOrganizations();
-      if (orgs.length === 0) throw new Error("User has no organizations");
-      const activeOrgId = api.getOrgId() || orgs[0].id;
-      api.setOrg(activeOrgId);
+      setOrganizations(orgs);
+      if (!orgs.length) throw new Error("No organization is available for this account.");
+      const activeId = chosenOrg || (orgs.some(o => o.id === api.getOrgId()) ? api.getOrgId()! : orgs[0].id);
+      api.setOrg(activeId);
+      const spaces = await api.listWorkspaces(activeId);
+      setWorkspaces(spaces);
+      const allProjects = (await Promise.all(spaces.map(ws => api.listWorkspaceProjects(ws.id)))).flat();
+      setProjects(allProjects);
+      setCurrentProject(previous => allProjects.find(p => p.id === previous?.id) || allProjects[0] || null);
+      setMembers(await api.listMembers(activeId));
+    } catch (e) { setError((e as Error).message); }
+    finally { setInitializing(false); }
+  };
 
-      const workspaces = await api.listWorkspaces(activeOrgId);
-      let projList: Project[] = [];
-      if (workspaces.length > 0) {
-        projList = await api.listWorkspaceProjects(workspaces[0].id);
-        // Bootstrap an initial project for a brand-new workspace.
-        if (projList.length === 0) {
-          const newProj = await api.createProject({
-            workspace_id: workspaces[0].id,
-            name: "Core Platform",
-            key: "STR",
-            description: "Main product engineering roadmap",
-          });
-          projList = [newProj];
-        }
-      }
+  const switchOrganization = async (id: string) => {
+    api.setOrg(id); setCurrentProject(null); setSelectedTask(null); setActiveTimer(null);
+    setKanbanBoard(null); setGanttChart(null); setProjects([]); setInitializing(true);
+    await refreshUserAndProjects(id); await refreshActiveTimer();
+  };
 
-      setProjects(projList);
-      if (!currentProject && projList.length > 0) {
-        setCurrentProject(projList[0]);
-      }
-    } catch (e) {
-      console.error("Auth initialization failed:", e);
-      api.clearAuth();
-      setIsAuthenticated(false);
-    }
+  const openTask = async (task: Task) => {
+    try { setSelectedTask(await api.getTask(task.id)); }
+    catch (e) { setError((e as Error).message); }
   };
 
   const refreshActiveTimer = async () => {
     try {
       const timer = await api.getActiveTimer();
       setActiveTimer(timer);
+      setRevision(v => v + 1);
     } catch (e) {
       console.error("Timer check failed:", e);
     }
@@ -113,15 +119,25 @@ export const App: React.FC = () => {
   const orgId = api.getOrgId();
   const roomName =
     currentProject && orgId ? `room:org:${orgId}:project:${currentProject.id}` : null;
-  const { broadcast } = useRealtime(roomName, () => {
-    refreshCurrentView();
+  const { broadcast, connected } = useRealtime(roomName, () => {
+    refreshCurrentView(); refreshActiveTimer(); setRevision(v => v + 1);
+    if (selectedTask) api.getTask(selectedTask.id).then(fresh => setSelectedTask(current => current?.id === fresh.id ? fresh : current)).catch(() => setSelectedTask(null));
   });
 
   // Apply a local mutation, refresh our view, and notify other clients in the room.
   const notifyChange = () => {
-    refreshCurrentView();
+    refreshCurrentView(); setRevision(v => v + 1);
+    if(currentProject) api.getProject(currentProject.id).then(fresh => {
+      setCurrentProject(fresh); setProjects(previous => previous.map(p => p.id === fresh.id ? fresh : p));
+    }).catch(e => setError(e.message));
     broadcast("TASK_UPDATED", {});
   };
+
+  useEffect(() => {
+    const expired = () => {setIsAuthenticated(false); setSelectedTask(null); setCurrentProject(null); setUser(null);};
+    window.addEventListener("stride-auth-required", expired);
+    return () => window.removeEventListener("stride-auth-required", expired);
+  }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -149,6 +165,7 @@ export const App: React.FC = () => {
     if (!currentProject || !newTaskTitle.trim()) return;
 
     try {
+      setCreating(true);
       await api.createTask({
         project_id: currentProject.id,
         title: newTaskTitle.trim(),
@@ -163,8 +180,8 @@ export const App: React.FC = () => {
       setIsCreateTaskOpen(false);
       notifyChange();
     } catch (e: any) {
-      alert(e.message || "Failed to create task");
-    }
+      setError(e.message || "Failed to create task");
+    } finally { setCreating(false); }
   };
 
   if (!isAuthenticated) {
@@ -175,9 +192,14 @@ export const App: React.FC = () => {
     <div className="h-screen w-screen flex flex-col bg-slate-950 overflow-hidden text-slate-100 font-sans">
       {/* Top Navigation */}
       <Navbar
+        canUseAI={canManage}
+        organizations={organizations}
+        activeOrgId={api.getOrgId()}
+        onSelectOrganization={switchOrganization}
+        connected={connected}
         currentProject={currentProject}
         projects={projects}
-        onSelectProject={setCurrentProject}
+        onSelectProject={p => {setSelectedTask(null); setKanbanBoard(null); setGanttChart(null); setCurrentProject(p);}}
         activeTimer={activeTimer}
         onRefreshTimer={refreshActiveTimer}
         onOpenAIDrawer={() => setIsAIDrawerOpen(true)}
@@ -191,30 +213,37 @@ export const App: React.FC = () => {
         <Sidebar
           currentTab={currentTab}
           onSelectTab={setCurrentTab}
-          onOpenCreateTask={() => setIsCreateTaskOpen(true)}
+          onOpenCreateTask={() => currentProject ? setIsCreateTaskOpen(true) : setCurrentTab("settings")}
         />
 
         {/* Dynamic Center View */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          {error && <div role="alert" className="error m-4 flex justify-between gap-3"><span>{error}</span><button className="underline" onClick={() => refreshUserAndProjects()}>Retry</button></div>}
+          {initializing && <p className="p-6 text-slate-400">Loading workspace…</p>}
+          {!initializing && !currentProject && currentTab !== "settings" && <div className="m-auto p-8 text-center space-y-3"><h1 className="text-xl font-semibold">Your next project starts here</h1><p className="text-slate-400">Create a project to organize your team’s work.</p><button className="btn-primary" onClick={() => setCurrentTab("settings")}>Open workspace settings</button></div>}
+          {currentTab === "settings" && <SettingsPage org={activeOrg} project={currentProject} workspaces={workspaces} canManage={canManage} onRefresh={() => refreshUserAndProjects()} />}
+          {currentProject && currentTab === "table" && <TablePage key={currentProject.id} project={currentProject} onSelectTask={openTask} revision={revision} canEdit={canEdit} />}
           {currentProject && currentTab === "kanban" && (
             <KanbanPage
+              canManage={canManage}
+              canEdit={canEdit}
               project={currentProject}
               board={kanbanBoard}
-              onSelectTask={setSelectedTask}
+              onSelectTask={openTask}
               onRefresh={notifyChange}
             />
           )}
 
           {currentProject && currentTab === "calendar" && (
-            <CalendarPage project={currentProject} />
+            <CalendarPage key={`${currentProject.id}-${revision}`} project={currentProject} onSelectTask={async id => {try {setSelectedTask(await api.getTask(id));} catch(e) {setError((e as Error).message);}}} />
           )}
 
           {currentProject && currentTab === "gantt" && (
-            <GanttPage project={currentProject} gantt={ganttChart} />
+            <GanttPage project={currentProject} gantt={ganttChart} onSelectTask={async id => {try {setSelectedTask(await api.getTask(id));} catch(e) {setError((e as Error).message);}}} />
           )}
 
           {currentProject && currentTab === "timesheets" && (
-            <TimesheetsPage project={currentProject} />
+            <TimesheetsPage key={currentProject.id} project={currentProject} canReview={canManage} userId={user?.id} externalRevision={revision} />
           )}
         </main>
       </div>
@@ -223,12 +252,16 @@ export const App: React.FC = () => {
       {selectedTask && currentProject && (
         <TaskDrawer
           task={selectedTask}
+          project={currentProject}
+          members={members}
+          canEdit={canEdit}
+          canDelete={canManage}
           statuses={currentProject.statuses || []}
           onClose={() => setSelectedTask(null)}
           onUpdate={() => {
             notifyChange();
             if (selectedTask) {
-              api.getTask(selectedTask.id).then(setSelectedTask).catch(console.error);
+              api.getTask(selectedTask.id).then(fresh => setSelectedTask(current => current?.id === fresh.id ? fresh : current)).catch(console.error);
             }
           }}
           activeTimer={activeTimer}
@@ -317,6 +350,7 @@ export const App: React.FC = () => {
 
               <button
                 type="submit"
+                disabled={creating}
                 className="w-full py-2.5 bg-sky-500 hover:bg-sky-400 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-500/20 transition-all hover:scale-[1.01]"
               >
                 Create Task

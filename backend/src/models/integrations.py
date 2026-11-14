@@ -18,9 +18,7 @@ class GitHubIntegration(Base, TimestampedModel, TenantScopedModel):
 
     __tablename__ = "github_integrations"
     # Inbound webhooks look up integrations by (repo_owner, repo_name) on every event.
-    __table_args__ = (
-        Index("ix_github_integrations_repo", "repo_owner", "repo_name"),
-    )
+    __table_args__ = (Index("ix_github_integrations_repo", "repo_owner", "repo_name"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     project_id: Mapped[str] = mapped_column(
@@ -59,9 +57,7 @@ class WebhookEventLog(Base, TimestampedModel):
 
     __tablename__ = "webhook_event_logs"
     # Supports provider-filtered queries and time-based retention pruning.
-    __table_args__ = (
-        Index("ix_webhook_event_logs_provider_created", "provider", "created_at"),
-    )
+    __table_args__ = (Index("ix_webhook_event_logs_provider_created", "provider", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)  # "github", "figma"

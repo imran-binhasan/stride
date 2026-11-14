@@ -3,7 +3,6 @@
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from src.models.project import (
     GranteeType,
     Label,
@@ -109,9 +108,15 @@ class ProjectRepository:
         category: StatusCategory,
         color: str = "#6B7280",
         position: int = 0,
+        wip_limit: int | None = None,
     ) -> WorkflowStatus:
         status = WorkflowStatus(
-            project_id=project_id, name=name, category=category, color=color, position=position
+            project_id=project_id,
+            name=name,
+            category=category,
+            color=color,
+            position=position,
+            wip_limit=wip_limit,
         )
         self.db.add(status)
         await self.db.flush()

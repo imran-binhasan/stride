@@ -2,18 +2,22 @@
 
 from collections import defaultdict
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from src.core.events import record_change
 from src.core.exceptions import ConflictException, EntityNotFoundException, ValidationException
+from src.models.auth import MemberStatus
+from src.models.task import DependencyType, TaskDependency
 from src.repositories.project_repo import ProjectRepository
 from src.repositories.task_repo import TaskRepository
 from src.repositories.user_repo import UserRepository
 from src.schemas.task import (
-    AttachmentResponse,
     CommentCreate,
     CommentResponse,
     DependencyCreate,
     DependencyResponse,
+    SubtaskCreate,
+    TaskChildResponse,
     TaskCreate,
     TaskMoveRequest,
     TaskResponse,
@@ -32,7 +36,7 @@ class TaskService:
         if assignee_id is None:
             return
         membership = await self.user_repo.get_org_membership(org_id=org_id, user_id=assignee_id)
-        if not membership:
+        if not membership or membership.status != MemberStatus.ACTIVE:
             raise ValidationException("Assignee is not a member of this organization")
 
     async def create_task(self, org_id: str, creator_id: str, payload: TaskCreate) -> TaskResponse:
@@ -52,6 +56,8 @@ class TaskService:
 
         await self._validate_assignee(org_id, payload.assignee_id)
 
+        await self._validate_links(org_id, project.id, payload.sprint_id, payload.parent_task_id)
+        self._validate_dates(payload.start_date, payload.due_date)
         new_counter = await self.project_repo.increment_task_counter(project.id)
         short_id = f"{project.key}-{new_counter}"
 
@@ -75,6 +81,9 @@ class TaskService:
             is_client_ticket=payload.is_client_ticket,
             custom_fields=payload.custom_fields,
         )
+        record_change(self.db, org_id, project.id, "TASK_CREATED", task.id, creator_id)
+        if payload.assignee_id:
+            await self.task_repo.add_assignee(task.id, payload.assignee_id)
         fresh_task = await self.task_repo.get_by_id(task.id, org_id=org_id)
         return TaskResponse.model_validate(fresh_task)
 
@@ -91,6 +100,8 @@ class TaskService:
         sprint_id: str | None = None,
         status_id: str | None = None,
         assignee_id: str | None = None,
+        priority=None,
+        search: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[TaskResponse]:
@@ -102,8 +113,14 @@ class TaskService:
             assignee_id=assignee_id,
             limit=limit,
             offset=offset,
+            top_level=True,
+            priority=priority,
+            search=search,
         )
-        return [TaskResponse.model_validate(t) for t in tasks]
+        return [
+            TaskResponse.model_validate(t).model_copy(update={"comments": [], "attachments": []})
+            for t in tasks
+        ]
 
     async def update_task(self, task_id: str, org_id: str, payload: TaskUpdate) -> TaskResponse:
         task = await self.task_repo.get_by_id(task_id, org_id=org_id)
@@ -116,13 +133,35 @@ class TaskService:
                 raise ValidationException("Target status does not belong to this project")
         await self._validate_assignee(org_id, payload.assignee_id)
 
-        for field, value in payload.model_dump(exclude_none=True).items():
+        changes = payload.model_dump(exclude_unset=True)
+        for required in (
+            "title",
+            "status_id",
+            "type",
+            "priority",
+            "is_client_ticket",
+            "custom_fields",
+        ):
+            if required in changes and changes[required] is None:
+                raise ValidationException(f"{required} cannot be null")
+        await self._validate_links(
+            org_id,
+            task.project_id,
+            changes.get("sprint_id", task.sprint_id),
+            changes.get("parent_task_id", task.parent_task_id),
+            task.id,
+        )
+        self._validate_dates(
+            changes.get("start_date", task.start_date), changes.get("due_date", task.due_date)
+        )
+        for field, value in changes.items():
             if field == "custom_fields" and value is not None:
                 task.custom_fields = {**task.custom_fields, **value}
             else:
                 setattr(task, field, value)
 
         await self.db.flush()
+        record_change(self.db, org_id, task.project_id, "TASK_UPDATED", task_id)
         fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
         return TaskResponse.model_validate(fresh)
 
@@ -139,6 +178,7 @@ class TaskService:
         task.position = payload.new_position
         await self.db.flush()
 
+        record_change(self.db, org_id, task.project_id, "TASK_UPDATED", task_id)
         fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
         return TaskResponse.model_validate(fresh)
 
@@ -151,6 +191,10 @@ class TaskService:
         if not task:
             raise EntityNotFoundException("Task", task_id)
 
+        if payload.parent_comment_id:
+            parent = await self.task_repo.get_comment_by_id(payload.parent_comment_id)
+            if not parent or parent.task_id != task_id:
+                raise ValidationException("Parent comment must belong to this task")
         comment = await self.task_repo.add_comment(
             task_id=task_id,
             author_id=author_id,
@@ -158,11 +202,15 @@ class TaskService:
             is_internal=payload.is_internal,
             parent_comment_id=payload.parent_comment_id,
         )
+        record_change(self.db, org_id, task.project_id, "COMMENT_ADDED", task.id, author_id)
+        await self.db.refresh(comment, ["author"])
         return CommentResponse.model_validate(comment)
 
-    async def delete_comment(self, comment_id: str, org_id: str, user_id: str, can_delete_any: bool) -> dict:
+    async def delete_comment(
+        self, comment_id: str, org_id: str, user_id: str, can_delete_any: bool
+    ) -> dict:
         comment = await self.task_repo.get_comment_by_id(comment_id)
-        if not comment:
+        if not comment or not await self.task_repo.get_by_id(comment.task_id, org_id=org_id):
             raise EntityNotFoundException("Comment", comment_id)
         if not can_delete_any and comment.author_id != user_id:
             raise ValidationException("You can only delete your own comments")
@@ -188,16 +236,29 @@ class TaskService:
         if predecessor.project_id != successor.project_id:
             raise ValidationException("Cross-project dependencies are not supported")
 
-        await self._verify_no_cycles(
-            project_id=predecessor.project_id,
-            new_pred_id=task_id,
-            new_succ_id=payload.successor_id,
+        pred_id, succ_id = task_id, payload.successor_id
+        if payload.dependency_type == DependencyType.BLOCKED_BY:
+            pred_id, succ_id = succ_id, pred_id
+        existing = await self.db.scalar(
+            select(TaskDependency).where(
+                TaskDependency.predecessor_id == pred_id, TaskDependency.successor_id == succ_id
+            )
         )
+        if existing:
+            raise ConflictException("Dependency already exists")
+        if payload.dependency_type != DependencyType.RELATES_TO:
+            await self._verify_no_cycles(
+                project_id=predecessor.project_id,
+                new_pred_id=pred_id,
+                new_succ_id=succ_id,
+            )
 
         dep = await self.task_repo.add_dependency(
-            predecessor_id=task_id,
-            successor_id=payload.successor_id,
-            dependency_type=payload.dependency_type,
+            predecessor_id=pred_id,
+            successor_id=succ_id,
+            dependency_type=DependencyType.RELATES_TO
+            if payload.dependency_type == DependencyType.RELATES_TO
+            else DependencyType.BLOCKS,
             lag_days=payload.lag_days,
         )
         return DependencyResponse.model_validate(dep)
@@ -206,7 +267,8 @@ class TaskService:
         existing_deps = await self.task_repo.get_dependency_graph(project_id)
         graph: dict[str, list[str]] = defaultdict(list)
         for dep in existing_deps:
-            graph[dep.predecessor_id].append(dep.successor_id)
+            if dep.dependency_type == DependencyType.BLOCKS:
+                graph[dep.predecessor_id].append(dep.successor_id)
         graph[new_pred_id].append(new_succ_id)
 
         visited: set[str] = set()
@@ -223,3 +285,71 @@ class TaskService:
 
         if dfs(new_succ_id):
             raise ConflictException("Adding this dependency creates a circular blocking cycle")
+
+    async def get_project_or_raise(self, project_id, org_id):
+        project = await self.project_repo.get_by_id(project_id, org_id=org_id)
+        if not project:
+            raise EntityNotFoundException("Project", project_id)
+        return project
+
+    @staticmethod
+    def _validate_dates(start, end):
+        if start and end and end < start:
+            raise ValidationException("Due date must not precede start date")
+
+    async def _validate_links(self, org_id, project_id, sprint_id, parent_id, task_id=None):
+        if sprint_id:
+            sprint = await self.project_repo.get_sprint_by_id(sprint_id)
+            if not sprint or sprint.project_id != project_id:
+                raise ValidationException("Sprint must belong to this project")
+        seen = {task_id} if task_id else set()
+        while parent_id:
+            if parent_id in seen:
+                raise ConflictException("Task parent relationship would create a cycle")
+            seen.add(parent_id)
+            parent = await self.task_repo.get_by_id(parent_id, org_id=org_id)
+            if not parent or parent.project_id != project_id:
+                raise ValidationException("Parent must belong to this project")
+            parent_id = parent.parent_task_id
+
+    async def add_subtask(self, task_id, org_id, creator_id, payload: SubtaskCreate):
+        parent = await self.task_repo.get_by_id(task_id, org_id=org_id)
+        if not parent:
+            raise EntityNotFoundException("Task", task_id)
+        child = await self.create_task(
+            org_id,
+            creator_id,
+            TaskCreate(
+                project_id=parent.project_id,
+                parent_task_id=task_id,
+                title=payload.title,
+                sprint_id=parent.sprint_id,
+            ),
+        )
+        task = await self.task_repo.get_by_id(child.id, org_id=org_id)
+        task.position = payload.position
+        await self.db.flush()
+        return TaskChildResponse.model_validate(task)
+
+    async def delete_task(self, task_id, org_id):
+        task = await self.task_repo.get_by_id(task_id, org_id=org_id)
+        if not task:
+            raise EntityNotFoundException("Task", task_id)
+        record_change(self.db, org_id, task.project_id, "TASK_DELETED", task.id)
+        await self.db.delete(task)
+        await self.db.flush()
+
+    async def delete_dependency(self, task_id, dependency_id, org_id):
+        if not await self.task_repo.get_by_id(task_id, org_id=org_id):
+            raise EntityNotFoundException("Task", task_id)
+        dep = await self.db.scalar(
+            select(TaskDependency).where(
+                TaskDependency.id == dependency_id,
+                (TaskDependency.predecessor_id == task_id)
+                | (TaskDependency.successor_id == task_id),
+            )
+        )
+        if not dep:
+            raise EntityNotFoundException("Dependency", dependency_id)
+        await self.db.delete(dep)
+        await self.db.flush()

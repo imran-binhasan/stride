@@ -9,6 +9,7 @@ from src.schemas.task import TaskResponse
 
 class KanbanColumnResponse(BaseModel):
     status: WorkflowStatusResponse
+    wip_exceeded: bool = False
     task_count: int
     tasks: list[TaskResponse] = []
 

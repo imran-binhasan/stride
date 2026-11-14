@@ -43,6 +43,9 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
+            from src.core.events import publish_changes
+
+            await publish_changes(session)
         except Exception:
             await session.rollback()
             raise

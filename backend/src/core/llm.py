@@ -47,9 +47,7 @@ def enabled_providers() -> list[LLMProvider]:
         base_url, key_attr, model_attr = spec
         api_key = getattr(settings, key_attr, None)
         if api_key:
-            providers.append(
-                LLMProvider(name, base_url, api_key, getattr(settings, model_attr))
-            )
+            providers.append(LLMProvider(name, base_url, api_key, getattr(settings, model_attr)))
     return providers
 
 

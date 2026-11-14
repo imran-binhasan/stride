@@ -73,3 +73,27 @@ describe("ApiClient", () => {
     expect(api.getToken()).toBeNull();
   });
 });
+
+describe('workspace session routing', () => {
+  it('uses the API WebSocket path and selected organization', () => {
+    api.setAuth(makeJwt({org_id:'default-org'}), 'refresh');
+    api.setOrg('selected-org');
+    const url = new URL(api.realtimeUrl()!);
+    expect(url.pathname).toBe('/api/v1/ws/realtime');
+    expect(url.searchParams.get('org_id')).toBe('selected-org');
+    api.clearAuth();
+  });
+
+  it('preserves the selected organization when refreshing a token', async () => {
+    api.setAuth(makeJwt({org_id:'default-org'}), 'refresh');
+    api.setOrg('selected-org');
+    let attempts = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if(url.endsWith('/auth/refresh')) return jsonResponse({access_token:makeJwt({org_id:'default-org'}),refresh_token:'new-refresh'});
+      return ++attempts === 1 ? jsonResponse({},401) : jsonResponse({id:'user'});
+    }));
+    await api.getMe();
+    expect(api.getOrgId()).toBe('selected-org');
+    api.clearAuth(); vi.unstubAllGlobals();
+  });
+});

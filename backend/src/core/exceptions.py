@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger("a3zen.exceptions")
 
@@ -74,6 +75,16 @@ class RateLimitExceededException(A3ZenException):
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "success": False,
+                "error": "The operation conflicts with existing records or references",
+            },
+        )
+
     @app.exception_handler(A3ZenException)
     async def a3zen_exception_handler(request: Request, exc: A3ZenException) -> JSONResponse:
         content = {"success": False, "error": exc.message}

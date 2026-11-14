@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.config import settings
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
@@ -30,7 +29,9 @@ async def github_webhook_receiver(
     """Public webhook endpoint receiving GitHub events (push, pull_request, etc.)."""
     raw_body = await request.body()
     if settings.ENVIRONMENT != "test":
-        if not verify_github_signature(raw_body, settings.GITHUB_WEBHOOK_SECRET, x_hub_signature_256):
+        if not verify_github_signature(
+            raw_body, settings.GITHUB_WEBHOOK_SECRET, x_hub_signature_256
+        ):
             raise HTTPException(status_code=401, detail="Invalid GitHub HMAC signature")
     payload = await request.json()
     result = await GitHubService(db).process_webhook(

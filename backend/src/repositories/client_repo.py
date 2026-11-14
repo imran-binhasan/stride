@@ -3,7 +3,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from src.models.client import ClientContact, ClientProjectAccess
 
 

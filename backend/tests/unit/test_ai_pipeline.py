@@ -80,7 +80,7 @@ async def test_gate2_to_gate5_sequence(db_session: AsyncSession):
     g4 = await ai_service.evaluate_gate4_tdd(
         payload=Gate4TDDRequest(feature_title="Webhooks Engine", plan_dag=g3.plan_dag),
     )
-    assert g4.passed is True
+    assert g4.passed is False
     assert "test_webhooks_engine_lifecycle" in g4.test_function_names
 
     # Gate 5
@@ -90,5 +90,6 @@ async def test_gate2_to_gate5_sequence(db_session: AsyncSession):
             test_module_code=g4.generated_test_module,
         )
     )
-    assert g5.passed is True
-    assert g5.coverage_percent >= 90.0
+    assert g5.passed is False
+    assert g5.coverage_percent is None
+    assert g5.tests_executed == 0

@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.schemas.client import (
@@ -30,7 +29,7 @@ async def create_client_contact(
 
 @router.get("", response_model=list[ClientContactResponse])
 async def list_client_contacts(
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_READ))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE_MEMBERS))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ClientContactResponse]:
     return await ClientService(db).list_contacts(org_id=ctx.org_id)
@@ -39,7 +38,7 @@ async def list_client_contacts(
 @router.get("/{contact_id}", response_model=ClientContactResponse)
 async def get_client_contact(
     contact_id: str,
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_READ))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE_MEMBERS))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ClientContactResponse:
     return await ClientService(db).get_contact(contact_id=contact_id, org_id=ctx.org_id)
@@ -79,4 +78,4 @@ async def revoke_project_access(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE_MEMBERS))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    return await ClientService(db).revoke_project_access(access_id=access_id)
+    return await ClientService(db).revoke_project_access(access_id=access_id, org_id=ctx.org_id)

@@ -15,9 +15,7 @@ async def test_list_my_orgs_and_workspaces(client: AsyncClient, make_tenant):
     mine = next(o for o in orgs.json() if o["id"] == t["org_id"])
     assert mine["role"] == "ORG_OWNER"
 
-    ws = await client.get(
-        f"/api/v1/organizations/{t['org_id']}/workspaces", headers=t["headers"]
-    )
+    ws = await client.get(f"/api/v1/organizations/{t['org_id']}/workspaces", headers=t["headers"])
     assert ws.status_code == 200
     assert t["ws_id"] in [w["id"] for w in ws.json()]
 
@@ -26,7 +24,5 @@ async def test_list_my_orgs_and_workspaces(client: AsyncClient, make_tenant):
 async def test_cannot_list_other_orgs_workspaces(client: AsyncClient, make_tenant):
     a = await make_tenant("disco-a@test.io", key="DSA")
     b = await make_tenant("disco-b@test.io", key="DSB")
-    r = await client.get(
-        f"/api/v1/organizations/{b['org_id']}/workspaces", headers=a["headers"]
-    )
+    r = await client.get(f"/api/v1/organizations/{b['org_id']}/workspaces", headers=a["headers"])
     assert r.status_code == 403

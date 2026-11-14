@@ -1,355 +1,74 @@
-import React, { useEffect, useState } from "react";
-import {
-  X,
-  Play,
-  Square,
-  Clock,
-  CheckSquare,
-  Plus,
-  Link,
-  GitPullRequest,
-  ExternalLink,
-  Layers,
-  Sparkles,
-  Calendar,
-  AlertCircle,
-  Tag
-} from "lucide-react";
-import { ActiveTimer, FigmaLink, Task, WorkflowStatus } from "../types";
-import { api } from "../services/api";
+import { FormEvent, useEffect, useState } from 'react';
+import { X, Play, Square, Trash2, Paperclip, ExternalLink } from 'lucide-react';
+import { ActiveTimer, ChecklistItem, FigmaLink, OrgMember, Project, Task, TaskPriority, WorkflowStatus } from '../types';
+import { api } from '../services/api';
 
-interface TaskDrawerProps {
-  task: Task | null;
-  statuses: WorkflowStatus[];
-  onClose: () => void;
-  onUpdate: () => void;
-  activeTimer: ActiveTimer | null;
-  onTimerChange: () => void;
+interface Props {
+  task: Task | null; statuses: WorkflowStatus[]; onClose: () => void;
+  onUpdate: () => void; activeTimer: ActiveTimer | null; onTimerChange: () => void;
+  project?: Project; members?: OrgMember[]; canEdit?: boolean; canDelete?: boolean;
 }
-
-export const TaskDrawer: React.FC<TaskDrawerProps> = ({
-  task,
-  statuses,
-  onClose,
-  onUpdate,
-  activeTimer,
-  onTimerChange,
-}) => {
-  const [subtaskTitle, setSubtaskTitle] = useState("");
-  const [figmaUrl, setFigmaUrl] = useState("");
-  const [figmaLinks, setFigmaLinks] = useState<FigmaLink[]>([]);
-  const [loadingFigma, setLoadingFigma] = useState(false);
-  const [newFieldName, setNewFieldName] = useState("");
-  const [newFieldValue, setNewFieldValue] = useState("");
-  const [isAddingField, setIsAddingField] = useState(false);
-
+export function TaskDrawer({task, statuses, onClose, onUpdate, activeTimer, onTimerChange, project, members = [], canEdit = true, canDelete = false}: Props) {
+  const [candidates, setCandidates] = useState<Task[]>([]);
+  const [draft, setDraft] = useState<Partial<Task>>({});
+  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
+  const [figma, setFigma] = useState<FigmaLink[]>([]);
+  const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloadUrls, setDownloadUrls] = useState<Record<string,string>>({});
   useEffect(() => {
-    if (task) {
-      api.listFigmaLinks(task.id).then(setFigmaLinks).catch(console.error);
-    }
+    if (!task) return;
+    setDraft({...task}); setError(''); setConfirmDelete(false);
+    const close = (event: KeyboardEvent) => { if(event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [task?.id]);
+  useEffect(() => {
+    if (!task) return;
+    let live = true;
+    api.getTable(task.project_id, {limit:"200"}).then(r=>{if(live)setCandidates(r.items.filter(t=>t.id!==task.id));}).catch(e=>{if(live)setError(e.message);});
+    api.getChecklist(task.id).then(data => {if(live) setChecklist(data);}).catch(e=>{if(live) setError(e.message);});
+    api.listFigmaLinks(task.id).then(data => {if(live) setFigma(data);}).catch(e=>{if(live) setError(e.message);});
+    Promise.all((task.attachments || []).map(async attachment => [attachment.id, (await api.attachmentUrl(task.id, attachment.id)).download_url] as const)).then(values=>{if(live) setDownloadUrls(Object.fromEntries(values));}).catch(e=>{if(live) setError(e.message);});
+    return () => {live=false;};
   }, [task]);
-
   if (!task) return null;
-
-  const isCurrentTimerActive = activeTimer?.task_id === task.id;
-
-  const handleStartTimer = async () => {
-    try {
-      await api.startTimer(task.id);
-      onTimerChange();
-    } catch (e: any) {
-      alert(e.message || "Failed to start timer");
-    }
-  };
-
-  const handleStopTimer = async () => {
-    try {
-      await api.stopTimer();
-      onTimerChange();
-    } catch (e: any) {
-      alert(e.message || "Failed to stop timer");
-    }
-  };
-
-  const handleAddSubtask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!subtaskTitle.trim()) return;
-    try {
-      await api.addSubtask(task.id, subtaskTitle);
-      setSubtaskTitle("");
-      onUpdate();
-    } catch (e: any) {
-      alert(e.message || "Failed to add subtask");
-    }
-  };
-
-  const handleAttachFigma = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!figmaUrl.trim()) return;
-    try {
-      setLoadingFigma(true);
-      const link = await api.attachFigma(task.id, figmaUrl);
-      setFigmaLinks([...figmaLinks, link]);
-      setFigmaUrl("");
-    } catch (e: any) {
-      alert(e.message || "Failed to attach Figma link");
-    } finally {
-      setLoadingFigma(false);
-    }
-  };
-
-  const handleAddCustomField = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFieldName.trim()) return;
-    try {
-      const updatedFields = { ...(task.custom_fields || {}), [newFieldName.trim()]: newFieldValue.trim() };
-      await api.updateTask(task.id, { custom_fields: updatedFields });
-      setNewFieldName("");
-      setNewFieldValue("");
-      setIsAddingField(false);
-      onUpdate();
-    } catch (e: any) {
-      alert(e.message || "Failed to add custom field");
-    }
-  };
-
-  const handleStatusChange = async (statusId: string) => {
-    try {
-      await api.updateTask(task.id, { status_id: statusId });
-      onUpdate();
-    } catch (e: any) {
-      alert(e.message || "Failed to update status");
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end">
-      <div className="w-full max-w-2xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl transition-transform duration-200">
-        {/* Header */}
-        <div className="h-14 border-b border-slate-800 px-5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-xs font-bold text-sky-400 bg-sky-950/60 border border-sky-800/40 px-2 py-0.5 rounded">
-              {task.short_id}
-            </span>
-            <select
-              value={task.status_id}
-              onChange={(e) => handleStatusChange(e.target.value)}
-              className="bg-slate-800 border border-slate-700 rounded px-2 py-0.5 text-xs font-semibold text-slate-200 cursor-pointer focus:outline-none focus:ring-1 focus:ring-sky-500"
-            >
-              {statuses.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* Active Tracking Controls */}
-            {isCurrentTimerActive ? (
-              <button
-                onClick={handleStopTimer}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-medium transition-colors"
-              >
-                <Square className="w-3.5 h-3.5 fill-white" />
-                <span>Stop Timer</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleStartTimer}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-medium transition-colors shadow-md shadow-emerald-500/10"
-              >
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span>Track Time</span>
-              </button>
-            )}
-
-            <button
-              onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Body Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Title */}
-          <div>
-            <h1 className="text-xl font-bold text-white tracking-tight">{task.title}</h1>
-            <p className="text-xs text-slate-400 mt-1">
-              Created on {new Date(task.created_at).toLocaleDateString()} by {task.assignee?.full_name || "Team Member"}
-            </p>
-          </div>
-
-          {/* Description */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Description</h3>
-            <div className="p-3.5 rounded-lg bg-slate-800/40 border border-slate-800 text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-              {task.description || "No description provided."}
-            </div>
-          </div>
-
-          {/* Metadata Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3.5 rounded-xl bg-slate-800/20 border border-slate-800">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-slate-500">Priority</span>
-              <p className="text-xs font-semibold text-sky-400 mt-0.5">{task.priority}</p>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-slate-500">Story Points</span>
-              <p className="text-xs font-semibold text-slate-200 mt-0.5">{task.story_points ?? "—"}</p>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-slate-500">Due Date</span>
-              <p className="text-xs font-semibold text-slate-200 mt-0.5">{task.due_date ?? "None"}</p>
-            </div>
-            <div>
-              <span className="text-[10px] uppercase font-bold text-slate-500">Assignee</span>
-              <p className="text-xs font-semibold text-slate-200 mt-0.5">{task.assignee?.full_name || "Unassigned"}</p>
-            </div>
-          </div>
-
-          {/* Dynamic ClickUp-Style Custom Fields */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <Tag className="w-3.5 h-3.5 text-sky-400" />
-                <span>Custom Fields</span>
-              </h3>
-              <button
-                onClick={() => setIsAddingField(!isAddingField)}
-                className="text-xs text-sky-400 hover:text-sky-300 font-medium flex items-center gap-1"
-              >
-                <Plus className="w-3 h-3" />
-                Add Field
-              </button>
-            </div>
-
-            {isAddingField && (
-              <form onSubmit={handleAddCustomField} className="flex gap-2 p-2.5 rounded-lg bg-slate-800/60 border border-slate-700">
-                <input
-                  type="text"
-                  placeholder="Field Name (e.g. Budget, Client)"
-                  value={newFieldName}
-                  onChange={(e) => setNewFieldName(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-                />
-                <input
-                  type="text"
-                  placeholder="Value"
-                  value={newFieldValue}
-                  onChange={(e) => setNewFieldValue(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-                />
-                <button
-                  type="submit"
-                  className="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-white rounded text-xs font-medium"
-                >
-                  Save
-                </button>
-              </form>
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              {Object.entries(task.custom_fields || {}).map(([key, val]) => (
-                <div key={key} className="p-2.5 rounded-lg bg-slate-800/30 border border-slate-800">
-                  <span className="text-[10px] text-slate-500 uppercase font-bold">{key}</span>
-                  <p className="text-xs font-medium text-slate-200 mt-0.5">{String(val)}</p>
-                </div>
-              ))}
-              {Object.keys(task.custom_fields || {}).length === 0 && !isAddingField && (
-                <p className="text-xs text-slate-500 col-span-2">No custom fields added yet.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Subtasks Checklist */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <CheckSquare className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Subtasks ({task.subtasks?.length || 0})</span>
-            </h3>
-
-            <div className="space-y-1.5">
-              {task.subtasks?.map((sub) => (
-                <div
-                  key={sub.id}
-                  className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-800/30 border border-slate-800/80 text-xs text-slate-200"
-                >
-                  <input
-                    type="checkbox"
-                    checked={sub.is_completed}
-                    readOnly
-                    className="w-3.5 h-3.5 rounded bg-slate-700 border-slate-600 text-sky-500 focus:ring-0 cursor-pointer"
-                  />
-                  <span className={sub.is_completed ? "line-through text-slate-500" : ""}>{sub.title}</span>
-                </div>
-              ))}
-            </div>
-
-            <form onSubmit={handleAddSubtask} className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Add subtask item..."
-                value={subtaskTitle}
-                onChange={(e) => setSubtaskTitle(e.target.value)}
-                className="flex-1 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg border border-slate-700"
-              >
-                Add
-              </button>
-            </form>
-          </div>
-
-          {/* Figma Design Embeds */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Link className="w-3.5 h-3.5 text-purple-400" />
-              <span>Figma Design Frames</span>
-            </h3>
-
-            <div className="space-y-2">
-              {figmaLinks.map((link) => (
-                <a
-                  key={link.id}
-                  href={link.figma_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center justify-between p-3 rounded-lg bg-purple-950/20 border border-purple-800/30 hover:border-purple-600/50 text-xs text-purple-300 transition-all group"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className="font-semibold text-white">{link.file_name}</span>
-                    <span className="text-[10px] text-purple-400 font-mono">Node: {link.node_id || "Root"}</span>
-                  </div>
-                  <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
-                </a>
-              ))}
-            </div>
-
-            <form onSubmit={handleAttachFigma} className="flex gap-2">
-              <input
-                type="url"
-                placeholder="https://figma.com/design/..."
-                value={figmaUrl}
-                onChange={(e) => setFigmaUrl(e.target.value)}
-                className="flex-1 bg-slate-800/60 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              />
-              <button
-                type="submit"
-                disabled={loadingFigma}
-                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg shadow-md shadow-purple-500/10"
-              >
-                {loadingFigma ? "Linking..." : "Attach"}
-              </button>
-            </form>
-          </div>
-        </div>
+  async function run(action: () => Promise<unknown>) {
+    setError(''); setBusy(true);
+    try {await action(); await onUpdate(); if(task) setChecklist(await api.getChecklist(task.id));}
+    catch(e) {setError((e as Error).message);} finally {setBusy(false);}
+  }
+  const value = (field: keyof Task, v: unknown) => setDraft(prev=>({...prev,[field]:v}));
+  const active = activeTimer?.task_id === task.id;
+  function submit(e: FormEvent<HTMLFormElement>, action: (values: FormData) => Promise<unknown>) {
+    e.preventDefault(); const form=e.currentTarget; const values=new FormData(form);
+    run(async()=>{await action(values); form.reset();});
+  }
+  return <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end" onMouseDown={e=>{if(e.target===e.currentTarget) onClose();}}>
+    <section role="dialog" aria-modal="true" aria-labelledby="task-heading" className="w-full max-w-2xl h-full bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col">
+      <header className="flex justify-between items-center gap-3 border-b border-slate-800 p-4"><span className="font-mono text-sm text-sky-400">{task.short_id}</span><div className="flex gap-2"><button disabled={busy} className="btn" onClick={()=>run(async()=>{if(active) await api.stopTimer(); else await api.startTimer(task.id); onTimerChange();})}>{active ? <Square size={14}/> : <Play size={14}/>} {active?'Stop timer':'Track time'}</button><button className="btn" aria-label="Close task" onClick={onClose}><X size={18}/></button></div></header>
+      <div className="overflow-auto flex-1 p-5 space-y-6">
+        {error && <p className="error" role="alert">{error}</p>}
+        <form className="space-y-4" onSubmit={e=>{e.preventDefault(); run(()=>api.updateTask(task.id, {title:draft.title,description:draft.description,priority:draft.priority,status_id:draft.status_id,assignee_id:draft.assignee_id || null,sprint_id:draft.sprint_id || null,story_points:draft.story_points ?? null,estimated_hours:draft.estimated_hours ?? null,start_date:draft.start_date || null,due_date:draft.due_date || null}));}}>
+          <h1 id="task-heading" className="text-lg font-semibold">{task.title}</h1>
+          <label className="label">Title<input autoFocus className="field" required maxLength={255} disabled={!canEdit} value={draft.title || ''} onChange={e=>value('title',e.target.value)} /></label>
+          <label className="label">Description<textarea className="field" rows={4} disabled={!canEdit} value={draft.description || ''} onChange={e=>value('description',e.target.value)} /></label>
+          <div className="grid grid-cols-2 gap-3"><label className="label">Status<select className="field" disabled={!canEdit} value={draft.status_id || ''} onChange={e=>value('status_id',e.target.value)}>{statuses.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label className="label">Priority<select className="field" disabled={!canEdit} value={draft.priority || 'MEDIUM'} onChange={e=>value('priority',e.target.value as TaskPriority)}>{['URGENT','HIGH','MEDIUM','LOW'].map(p=><option key={p}>{p}</option>)}</select></label>
+          <label className="label">Assignee<select className="field" disabled={!canEdit} value={draft.assignee_id || ''} onChange={e=>value('assignee_id',e.target.value)}><option value="">Unassigned</option>{members.filter(m=>m.status==='ACTIVE' && m.user).map(m=><option key={m.id} value={m.user!.id}>{m.user!.full_name}</option>)}</select></label>
+          <label className="label">Sprint<select className="field" disabled={!canEdit} value={draft.sprint_id || ''} onChange={e=>value('sprint_id',e.target.value)}><option value="">Backlog</option>{project?.sprints?.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+          <label className="label">Story points<input type="number" min="0" step="0.5" className="field" disabled={!canEdit} value={draft.story_points ?? ''} onChange={e=>value('story_points',e.target.value?Number(e.target.value):null)}/></label><label className="label">Estimated hours<input type="number" min="0" step="0.5" className="field" disabled={!canEdit} value={draft.estimated_hours ?? ''} onChange={e=>value('estimated_hours',e.target.value?Number(e.target.value):null)}/></label>
+          <label className="label">Start date<input type="date" className="field" disabled={!canEdit} value={draft.start_date || ''} onChange={e=>value('start_date',e.target.value)}/></label><label className="label">Due date<input type="date" className="field" disabled={!canEdit} value={draft.due_date || ''} onChange={e=>value('due_date',e.target.value)}/></label></div>
+          {canEdit && <button className="btn-primary" disabled={busy}>Save changes</button>}
+        </form>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Subtasks</h2>{task.subtasks?.map(sub=><label className="flex gap-3 items-center text-sm" key={sub.id}><input type="checkbox" checked={sub.is_completed} disabled={!canEdit || busy} onChange={e=>{const state=statuses.find(s=>s.category===(e.target.checked?'DONE':'TODO')); if(state) run(()=>api.updateTask(sub.id,{status_id:state.id}));}} /><span className={sub.is_completed?'line-through text-slate-500':''}>{sub.title}</span></label>)}{canEdit && <form className="flex gap-2" onSubmit={e=>submit(e,values=>api.addSubtask(task.id,String(values.get('title'))))}><input className="field" name="title" aria-label="Subtask title" required placeholder="Add a subtask…"/><button className="btn" disabled={busy}>Add</button></form>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Checklist</h2>{checklist.map(item=><label className="flex gap-3 items-center text-sm" key={item.id}><input type="checkbox" checked={item.is_completed} disabled={!canEdit || busy} onChange={e=>run(()=>api.updateChecklist(task.id,item.id,e.target.checked))}/>{item.title}</label>)}{canEdit && <form className="flex gap-2" onSubmit={e=>submit(e,v=>api.addChecklist(task.id,String(v.get('title'))))}><input className="field" name="title" aria-label="Checklist item" required placeholder="Add a checklist item…"/><button className="btn" disabled={busy}>Add</button></form>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Dependencies</h2>{task.dependencies_out?.map(dep=><div className="flex justify-between items-center gap-2 text-sm" key={dep.id}><span>{dep.dependency_type==='RELATES_TO'?'Related to':'Blocks'} {candidates.find(t=>t.id===dep.successor_id)?.short_id || 'Linked issue'}</span>{canEdit && <button className="btn" disabled={busy} onClick={()=>run(()=>api.removeDependency(task.id,dep.id))}>Remove</button>}</div>)}{canEdit && <form className="flex gap-2" onSubmit={e=>submit(e,v=>api.addDependency(task.id,String(v.get('successor'))))}><select name="successor" className="field" required aria-label="Issue this blocks"><option value="">Choose an issue…</option>{candidates.map(t=><option key={t.id} value={t.id}>{t.short_id} · {t.title}</option>)}</select><button className="btn" disabled={busy}>Link</button></form>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Attachments</h2>{task.attachments?.map(file=><a key={file.id} className="flex gap-2 items-center text-sm text-sky-400 hover:underline" href={downloadUrls[file.id]} target="_blank" rel="noreferrer"><Paperclip size={14}/>{file.file_name} · {Math.ceil(file.file_size/1024)} KB</a>)}{canEdit && <label className="label">Upload a file (up to 25 MB)<input aria-label="Upload attachment" className="field" type="file" disabled={busy} onChange={e=>{const file=e.target.files?.[0];if(file) run(()=>api.uploadAttachment(task.id,file));e.target.value='';}}/></label>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Designs</h2>{figma.map(link=><a className="block rounded-lg border border-slate-800 p-3 text-sky-400 text-sm" key={link.id} href={link.figma_url} target="_blank" rel="noreferrer">{link.thumbnail_url && <img className="rounded mb-2 max-h-40" src={link.thumbnail_url} alt={link.file_name || 'Figma design'} loading="lazy"/>}<span className="flex gap-2 items-center">{link.file_name || 'Open in Figma'} <ExternalLink size={14}/></span></a>)}{canEdit && <form className="flex gap-2" onSubmit={e=>submit(e,v=>api.attachFigma(task.id,String(v.get('url'))))}><input type="url" name="url" className="field" required aria-label="Figma URL" placeholder="Paste a Figma design link…"/><button className="btn" disabled={busy}>Attach</button></form>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Custom fields</h2>{Object.entries(task.custom_fields || {}).map(([key,val])=><p className="text-sm" key={key}><span className="text-slate-500 mr-2">{key}</span>{String(val)}</p>)}{canEdit && <form className="flex gap-2" onSubmit={e=>submit(e,v=>api.updateTask(task.id,{custom_fields:{[String(v.get('name'))]:String(v.get('value'))}}))}><input className="field" name="name" required aria-label="Custom field name" placeholder="Field name"/><input className="field" name="value" aria-label="Custom field value" placeholder="Value"/><button className="btn" disabled={busy}>Save</button></form>}</section>
+        <section className="space-y-3"><h2 className="font-semibold text-sm">Discussion</h2>{task.comments?.map(comment=><article className="rounded-lg border border-slate-800 p-3 space-y-2" key={comment.id}><div className="text-xs text-slate-500">{comment.author?.full_name || 'Team member'} · {new Date(comment.created_at).toLocaleString()}</div><p className="whitespace-pre-wrap text-sm">{comment.content}</p></article>)}{canEdit && <form className="space-y-2" onSubmit={e=>submit(e,v=>api.addComment(task.id,String(v.get('content'))))}><textarea rows={3} name="content" aria-label="Comment" required className="field" placeholder="Write an update…"/><button className="btn" disabled={busy}>Post comment</button></form>}</section>
+        {canDelete && <div className="border-t border-slate-800 pt-4">{confirmDelete?<div className="flex items-center gap-3"><span className="text-sm text-red-300">Delete this issue and its subtasks?</span><button className="btn" disabled={busy} onClick={()=>run(async()=>{await api.deleteTask(task.id);onClose();})}>Delete permanently</button><button className="btn" onClick={()=>setConfirmDelete(false)}>Cancel</button></div>:<button className="btn text-red-400" onClick={()=>setConfirmDelete(true)}><Trash2 size={14}/>Delete issue</button>}</div>}
       </div>
-    </div>
-  );
-};
+    </section>
+  </div>;
+}

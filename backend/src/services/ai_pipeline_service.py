@@ -1,9 +1,13 @@
 """5-Gate AI Context & Loop Engineering execution service."""
 
+import ast
+import json
 import logging
 import re
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.config import settings
 from src.core.exceptions import EntityNotFoundException, ValidationException
 from src.core.llm import complete_json
 from src.models.task import TaskPriority
@@ -211,25 +215,43 @@ class AIPipelineService:
     # GATE 4: TDD Test Specification & Mock Suite Generation
     # -------------------------------------------------------------
     async def evaluate_gate4_tdd(self, payload: Gate4TDDRequest) -> Gate4TDDResponse:
-        clean_name = re.sub(r"[^\w]", "_", payload.feature_title.lower()).strip("_")
-        test_fn_name = f"test_{clean_name}_lifecycle"
-
-        sample_test_code = f'''"""Automated TDD Test Suite for {payload.feature_title}."""
-import pytest
-from httpx import AsyncClient
-
-@pytest.mark.asyncio
-async def {test_fn_name}(client: AsyncClient):
-    # Step 1: Execute feature request
-    response = await client.get("/health")
-    assert response.status_code == 200
-'''
-
+        data = await complete_json(
+            "Write a pytest module implementing the supplied acceptance criteria. "
+            "Return JSON with generated_test_module (Python string). Do not claim tests ran. "
+            "Tests must validate feature behavior, not just health endpoints.",
+            json.dumps(
+                {
+                    "feature": payload.feature_title,
+                    "criteria": payload.acceptance_criteria,
+                    "plan": [n.model_dump() for n in payload.plan_dag],
+                }
+            ),
+        )
+        if data and isinstance(data.get("generated_test_module"), str):
+            code = data["generated_test_module"]
+        else:
+            clean_name = re.sub(r"[^a-z0-9_]", "_", payload.feature_title.lower())[:80]
+            code = (
+                "import pytest\n\n"
+                + f"def test_{clean_name}_lifecycle():\n"
+                + "    pytest.fail('Acceptance tests require implementation or an LLM provider')\n"
+            )
+        try:
+            tree = ast.parse(code)
+            functions = [
+                n.name
+                for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name.startswith("test_")
+            ]
+            count = sum(isinstance(n, ast.Assert) for n in ast.walk(tree))
+        except (SyntaxError, ValueError):
+            functions, count = [], 0
         return Gate4TDDResponse(
-            passed=True,
-            generated_test_module=sample_test_code,
-            test_function_names=[test_fn_name],
-            assertions_count=len(payload.acceptance_criteria) + 2,
+            passed=bool(functions) and count > 0,
+            generated_test_module=code,
+            test_function_names=functions,
+            assertions_count=count,
         )
 
     # -------------------------------------------------------------
@@ -238,14 +260,60 @@ async def {test_fn_name}(client: AsyncClient):
     async def evaluate_gate5_execution(
         self, payload: Gate5ExecutionRequest
     ) -> Gate5ExecutionResponse:
-        return Gate5ExecutionResponse(
-            passed=True,
-            static_analysis_passed=True,
-            tests_executed=5,
-            tests_passed=5,
-            coverage_percent=95.5,
-            summary=f"All tests for '{payload.feature_title}' executed cleanly with 95.5% coverage and PEP 8 compliance.",
-        )
+        try:
+            tree = ast.parse(payload.test_module_code)
+            compile(
+                tree, "generated_tests.py", "exec"
+            )  # syntax validation only; never executes code
+        except (SyntaxError, ValueError, TypeError) as error:
+            return Gate5ExecutionResponse(
+                passed=False,
+                static_analysis_passed=False,
+                tests_executed=0,
+                tests_passed=0,
+                execution_status="invalid_code",
+                summary=f"Python syntax validation failed: {type(error).__name__}",
+            )
+        if not settings.AI_RUNNER_URL:
+            return Gate5ExecutionResponse(
+                passed=False,
+                static_analysis_passed=True,
+                tests_executed=0,
+                tests_passed=0,
+                execution_status="not_configured",
+                summary="Syntax checked. No tests executed: configure an isolated AI_RUNNER_URL to verify generated code.",
+            )
+        try:
+            headers = (
+                {"Authorization": f"Bearer {settings.AI_RUNNER_TOKEN}"}
+                if settings.AI_RUNNER_TOKEN
+                else {}
+            )
+            async with httpx.AsyncClient(timeout=settings.AI_RUNNER_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    settings.AI_RUNNER_URL, json=payload.model_dump(), headers=headers
+                )
+                response.raise_for_status()
+                result = Gate5ExecutionResponse.model_validate(response.json())
+            if (
+                result.execution_status != "completed"
+                or result.tests_executed < 1
+                or not 0 <= result.tests_passed <= result.tests_executed
+            ):
+                raise ValueError("Runner did not return completed test results")
+            result.passed = (
+                result.static_analysis_passed and result.tests_passed == result.tests_executed
+            )
+            return result
+        except (httpx.HTTPError, ValueError):
+            return Gate5ExecutionResponse(
+                passed=False,
+                static_analysis_passed=True,
+                tests_executed=0,
+                tests_passed=0,
+                execution_status="runner_failed",
+                summary="The isolated runner did not return valid execution results.",
+            )
 
     # -------------------------------------------------------------
     # FULL END-TO-END PIPELINE ORCHESTRATOR
@@ -300,7 +368,7 @@ async def {test_fn_name}(client: AsyncClient):
         )
 
         return FullPipelineExecutionResponse(
-            pipeline_success=True,
+            pipeline_success=all((g1.passed, g2.passed, g3.passed, g4.passed, g5.passed)),
             gate1_intent=g1,
             gate2_context=g2,
             gate3_plan=g3,

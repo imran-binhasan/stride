@@ -6,7 +6,18 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.models.base import Base, TenantScopedModel, TimestampedModel, generate_uuid, utc_now
 
@@ -31,6 +42,13 @@ class TimeEntry(Base, TimestampedModel, TenantScopedModel):
     # Serves both the active-timer sort and the daily-report range scan.
     __table_args__ = (
         Index("ix_time_entries_user_start", "user_id", "start_time"),
+        Index(
+            "uq_running_timer_user",
+            "user_id",
+            unique=True,
+            sqlite_where=text("end_time IS NULL"),
+            postgresql_where=text("end_time IS NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)

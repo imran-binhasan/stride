@@ -1,5 +1,13 @@
 import {
   ActiveTimer,
+  OrgMember,
+  Sprint,
+  TimeEntry,
+  ChecklistItem,
+  TaskComment,
+  Attachment,
+  TableResult,
+  OrgRole,
   CalendarView,
   DailyActivitySummary,
   FigmaLink,
@@ -18,7 +26,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || "/api/v1";
 
 function decodeOrgIdFromToken(token: string): string | null {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
     return payload.org_id ?? null;
   } catch {
     return null;
@@ -71,8 +79,12 @@ class ApiClient {
   /** WebSocket URL for the realtime endpoint, carrying the access token. */
   realtimeUrl(): string | null {
     if (!this.token) return null;
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${window.location.host}/ws/realtime?token=${encodeURIComponent(this.token)}`;
+    const base = new URL(API_BASE, window.location.origin);
+    base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+    base.pathname = base.pathname.replace(/\/$/, "") + "/ws/realtime";
+    base.searchParams.set("token", this.token);
+    if (this.orgId) base.searchParams.set("org_id", this.orgId);
+    return base.toString();
   }
 
   private async doRefresh(): Promise<boolean> {
@@ -88,7 +100,7 @@ class ApiClient {
           });
           if (!res.ok) return false;
           const data = (await res.json()) as { access_token: string; refresh_token: string };
-          this.setAuth(data.access_token, data.refresh_token);
+          this.setAuth(data.access_token, data.refresh_token, this.orgId ?? undefined);
           return true;
         } catch {
           return false;
@@ -129,19 +141,24 @@ class ApiClient {
         return this.request<T>(endpoint, options, false);
       }
       this.clearAuth();
+      window.dispatchEvent(new Event("stride-auth-required"));
     }
 
     if (!res.ok) {
       let errorMsg = `HTTP Error ${res.status}`;
       try {
         const errJson = await res.json();
-        errorMsg = errJson.error || errJson.detail || errorMsg;
+        errorMsg = Array.isArray(errJson.details) ? errJson.details.map((item: {loc?: string[]; msg?: string}) => `${item.loc?.slice(1).join('.') || 'Input'}: ${item.msg || 'Invalid value'}`).join('; ') : typeof errJson.error === "string" ? errJson.error : typeof errJson.detail === "string" ? errJson.detail : errorMsg;
       } catch {}
       throw new Error(errorMsg);
     }
 
     if (res.status === 204) return undefined as T;
     return res.json();
+  }
+
+  async acceptInvite(token: string, full_name: string, password: string) {
+    return this.request<{access_token: string; refresh_token: string}>("/organizations/invites/accept", {method:"POST",body:JSON.stringify({token,full_name,password})});
   }
 
   // Auth
@@ -315,6 +332,40 @@ class ApiClient {
   async listFigmaLinks(taskId: string): Promise<FigmaLink[]> {
     return this.request<FigmaLink[]>(`/integrations/tasks/${taskId}/figma`);
   }
+
+  async listMembers(orgId: string): Promise<OrgMember[]> { return this.request(`/organizations/${orgId}/members`); }
+  async inviteMember(orgId: string, email: string, role: OrgRole) { return this.request<OrgMember & { invite_token: string }>(`/organizations/${orgId}/members/invite`, { method: "POST", body: JSON.stringify({ email, role }) }); }
+  async addMember(orgId: string, email: string, role: OrgRole) { return this.request<OrgMember>(`/organizations/${orgId}/members`, { method: "POST", body: JSON.stringify({ email, role }) }); }
+  async updateMember(orgId: string, id: string, changes: Partial<OrgMember>) { return this.request<OrgMember>(`/organizations/${orgId}/members/${id}`, { method: "PATCH", body: JSON.stringify(changes) }); }
+  async createWorkspace(orgId: string, name: string) { return this.request<Workspace>(`/organizations/${orgId}/workspaces`, { method: "POST", body: JSON.stringify({ name }) }); }
+  async createSprint(projectId: string, values: { name: string; start_date?: string; end_date?: string; goal?: string }) { return this.request<Sprint>(`/projects/${projectId}/sprints`, { method: "POST", body: JSON.stringify(values) }); }
+  async updateSprint(id: string, changes: Partial<Sprint>) { return this.request<Sprint>(`/projects/sprints/${id}`, { method: "PATCH", body: JSON.stringify(changes) }); }
+  async updateStatus(projectId: string, id: string, changes: Partial<WorkflowStatus>) { return this.request<WorkflowStatus>(`/projects/${projectId}/statuses/${id}`, { method: "PATCH", body: JSON.stringify(changes) }); }
+  async deleteTask(id: string) { return this.request<void>(`/tasks/${id}`, { method: "DELETE" }); }
+  async addComment(id: string, content: string) { return this.request<TaskComment>(`/tasks/${id}/comments`, { method: "POST", body: JSON.stringify({ content }) }); }
+  async getChecklist(id: string) { return this.request<ChecklistItem[]>(`/tasks/${id}/checklist`); }
+  async addChecklist(id: string, title: string) { return this.request<ChecklistItem>(`/tasks/${id}/checklist`, { method: "POST", body: JSON.stringify({ title }) }); }
+  async updateChecklist(id: string, itemId: string, is_completed: boolean) { return this.request<ChecklistItem>(`/tasks/${id}/checklist/${itemId}`, { method: "PATCH", body: JSON.stringify({ is_completed }) }); }
+  async addDependency(id: string, successor_id: string) { return this.request(`/tasks/${id}/dependencies`, { method: "POST", body: JSON.stringify({ successor_id }) }); }
+  async removeDependency(id: string, dependencyId: string) { return this.request<void>(`/tasks/${id}/dependencies/${dependencyId}`, { method: "DELETE" }); }
+  async getTable(projectId: string, params: Record<string, string> = {}) { return this.request<TableResult>(`/views/table/${projectId}?${new URLSearchParams(params)}`); }
+  async calendarExport(projectId: string) {
+    const res = await fetch(`${API_BASE}/views/calendar/${projectId}/export.ics`, { headers: { Authorization: `Bearer ${this.token}`, "X-Org-ID": this.orgId || "" } });
+    if (!res.ok) throw new Error("Calendar export failed");
+    return res.blob();
+  }
+  async uploadAttachment(taskId: string, file: File): Promise<Attachment> {
+    const reservation = await this.request<{attachment_id: string; upload_url: string}>(`/tasks/${taskId}/attachments/upload-url`, { method: "POST", body: JSON.stringify({ file_name: file.name, file_size: file.size, mime_type: file.type || "application/octet-stream" }) });
+    const uploaded = await fetch(reservation.upload_url, { method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+    if (!uploaded.ok) throw new Error("File upload failed");
+    return this.request<Attachment>(`/tasks/${taskId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ attachment_id: reservation.attachment_id }) });
+  }
+  async attachmentUrl(taskId: string, id: string) { return this.request<{download_url: string}>(`/tasks/${taskId}/attachments/${id}/download-url`); }
+  async listTimeEntries(allMembers = false, offset = 0) { return this.request<TimeEntry[]>(`/time-tracking/entries?limit=50&offset=${offset}&all_members=${allMembers}`); }
+  async manualTimeEntry(values: {task_id: string; start_time: string; end_time: string; notes?: string; is_billable: boolean}) { return this.request<TimeEntry>("/time-tracking/entries", { method: "POST", body: JSON.stringify(values) }); }
+  async timeEntryAction(id: string, action: "submit" | "recall" | "review", values?: { status: string; reason?: string }) { return this.request<TimeEntry>(`/time-tracking/entries/${id}/${action}`, { method: "POST", body: JSON.stringify(values || {}) }); }
+  async deleteTimeEntry(id: string) { return this.request<void>(`/time-tracking/entries/${id}`, { method: "DELETE" }); }
+  async connectGithub(projectId: string, repo_owner: string, repo_name: string) { return this.request(`/integrations/projects/${projectId}/github`, { method: "POST", body: JSON.stringify({repo_owner, repo_name}) }); }
 
   // AI Pipeline
   async runFullAIPipeline(projectId: string, featurePrompt: string): Promise<FullAIPipelineResponse> {

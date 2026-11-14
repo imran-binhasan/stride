@@ -17,6 +17,8 @@ import { api } from "../services/api";
 
 interface KanbanPageProps {
   project: Project;
+  canManage?: boolean;
+  canEdit?: boolean;
   board: KanbanBoard | null;
   onSelectTask: (task: Task) => void;
   onRefresh: () => void;
@@ -24,10 +26,14 @@ interface KanbanPageProps {
 
 export const KanbanPage: React.FC<KanbanPageProps> = ({
   project,
+  canManage = true,
+  canEdit = true,
   board,
   onSelectTask,
   onRefresh,
 }) => {
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
   const [isAddingStatus, setIsAddingStatus] = useState(false);
   const [newStatusName, setNewStatusName] = useState("");
   const [newStatusColor, setNewStatusColor] = useState("#3B82F6");
@@ -83,7 +89,7 @@ export const KanbanPage: React.FC<KanbanPageProps> = ({
 
         {/* Add Custom Status Column (ClickUp Style) */}
         <div className="flex items-center gap-2">
-          {isAddingStatus ? (
+          {canManage && (isAddingStatus ? (
             <form onSubmit={handleCreateStatus} className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-1.5 shadow-lg">
               <input
                 type="text"
@@ -131,10 +137,12 @@ export const KanbanPage: React.FC<KanbanPageProps> = ({
               <Plus className="w-3.5 h-3.5" />
               <span>Add Custom Column</span>
             </button>
-          )}
+          ))}
         </div>
       </div>
 
+      {error && <p role="alert" className="error mb-3">{error}</p>}
+      <input aria-label="Filter board issues" className="field max-w-sm mb-4" placeholder="Filter by issue title or key…" value={search} onChange={e => setSearch(e.target.value)} />
       {/* Kanban Board Columns */}
       <div className="flex-1 flex gap-5 overflow-x-auto pb-4 items-start">
         {board.columns.map((col, colIndex) => {
@@ -144,6 +152,8 @@ export const KanbanPage: React.FC<KanbanPageProps> = ({
           return (
             <div
               key={col.status.id}
+              onDragOver={e => e.preventDefault()}
+              onDrop={async e => {e.preventDefault();const id=e.dataTransfer.getData('text/plain');if(id && canEdit)try{await api.moveTask(id,col.status.id,col.tasks.length*1000+1000);onRefresh();}catch(error){setError((error as Error).message);}}}
               className="w-80 shrink-0 bg-slate-900/60 border border-slate-800 rounded-xl flex flex-col max-h-full overflow-hidden shadow-sm"
             >
               {/* Column Header */}
@@ -158,15 +168,20 @@ export const KanbanPage: React.FC<KanbanPageProps> = ({
                   </h3>
                 </div>
                 <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700/60">
-                  {col.task_count}
+                  {col.task_count}{col.status.wip_limit ? ` / ${col.status.wip_limit}` : ""}{col.wip_exceeded ? " · Over limit" : ""}
                 </span>
               </div>
 
               {/* Task Cards Container */}
               <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                {col.tasks.map((task) => (
+                {col.tasks.filter(task => `${task.title} ${task.short_id}`.toLowerCase().includes(search.toLowerCase())).map((task) => (
                   <div
                     key={task.id}
+                    draggable={canEdit}
+                    onDragStart={e => e.dataTransfer.setData('text/plain',task.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => {if(e.key==='Enter') onSelectTask(task);}}
                     onClick={() => onSelectTask(task)}
                     className="p-3.5 rounded-xl bg-slate-800/40 hover:bg-slate-800/80 border border-slate-700/60 hover:border-slate-600 transition-all cursor-pointer shadow-sm group space-y-2.5"
                   >

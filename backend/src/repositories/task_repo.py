@@ -6,7 +6,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from src.models.task import (
     Attachment,
     Comment,
@@ -14,6 +13,7 @@ from src.models.task import (
     Task,
     TaskAssignee,
     TaskDependency,
+    TaskLabel,
     TaskPriority,
     TaskType,
 )
@@ -26,12 +26,17 @@ class TaskRepository:
     async def get_by_id(self, task_id: str, org_id: str | None = None) -> Task | None:
         stmt = (
             select(Task)
+            .execution_options(populate_existing=True)
             .where(Task.id == task_id)
             .options(
                 selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
                 selectinload(Task.assignee),
-                selectinload(Task.assignees),
-                selectinload(Task.children),
+                selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.children).selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
+                selectinload(Task.comments).selectinload(Comment.author),
+                selectinload(Task.attachments),
                 selectinload(Task.comments).selectinload(Comment.author),
                 selectinload(Task.attachments),
                 selectinload(Task.dependencies_out),
@@ -47,7 +52,11 @@ class TaskRepository:
         stmt = (
             select(Task)
             .where(Task.project_id == project_id, Task.short_id == short_id)
-            .options(selectinload(Task.status), selectinload(Task.assignee))
+            .options(
+                selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
+                selectinload(Task.assignee),
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -72,6 +81,9 @@ class TaskRepository:
         assignee_id: str | None = None,
         task_type: TaskType | None = None,
         parent_task_id: str | None = None,
+        top_level: bool = False,
+        priority: TaskPriority | None = None,
+        search: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Task]:
@@ -80,14 +92,27 @@ class TaskRepository:
             .where(Task.project_id == project_id, Task.org_id == org_id)
             .options(
                 selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
                 selectinload(Task.assignee),
-                selectinload(Task.assignees),
-                selectinload(Task.children),
+                selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.children).selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
+                selectinload(Task.comments).selectinload(Comment.author),
+                selectinload(Task.attachments),
                 selectinload(Task.dependencies_out),
                 selectinload(Task.dependencies_in),
             )
             .order_by(Task.position.asc())
         )
+        if top_level:
+            stmt = stmt.where(Task.parent_task_id.is_(None))
+        if priority:
+            stmt = stmt.where(Task.priority == priority)
+        if search:
+            term = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            stmt = stmt.where(
+                Task.title.ilike(term, escape="\\") | Task.short_id.ilike(term, escape="\\")
+            )
         if sprint_id:
             stmt = stmt.where(Task.sprint_id == sprint_id)
         if status_id:
@@ -243,3 +268,23 @@ class TaskRepository:
         await self.db.flush()
         await self.db.refresh(att)
         return att
+
+    async def get_many(self, ids: list[str], org_id: str):
+        if not ids:
+            return []
+        stmt = (
+            select(Task)
+            .where(Task.id.in_(ids), Task.org_id == org_id)
+            .options(
+                selectinload(Task.status),
+                selectinload(Task.assignee),
+                selectinload(Task.assignees).selectinload(TaskAssignee.user),
+                selectinload(Task.children).selectinload(Task.status),
+                selectinload(Task.labels).selectinload(TaskLabel.label),
+                selectinload(Task.comments).selectinload(Comment.author),
+                selectinload(Task.attachments),
+                selectinload(Task.dependencies_out),
+                selectinload(Task.dependencies_in),
+            )
+        )
+        return list(await self.db.scalars(stmt))

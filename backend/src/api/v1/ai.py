@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.schemas.ai import (
@@ -50,6 +49,9 @@ async def evaluate_gate3_plan(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.AI_USE))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Gate3PlanResponse:
+    from src.services.project_service import ProjectService
+
+    await ProjectService(db).get_project(payload.project_id, ctx.org_id)
     return await AIPipelineService(db).evaluate_gate3_plan(payload=payload)
 
 

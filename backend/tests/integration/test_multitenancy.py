@@ -28,9 +28,7 @@ async def test_cannot_read_or_mutate_another_orgs_project_and_task(
     assert r.status_code == 404
 
     # A listing tasks in B's project -> empty (scoped by A's org)
-    r = await client.get(
-        f"/api/v1/tasks/project/{b['project']['id']}", headers=a["headers"]
-    )
+    r = await client.get(f"/api/v1/tasks/project/{b['project']['id']}", headers=a["headers"])
     assert r.status_code == 200
     assert r.json() == []
 

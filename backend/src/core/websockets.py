@@ -140,9 +140,7 @@ class ConnectionManager:
         sender_ws: WebSocket | None = None,
     ) -> None:
         """Broadcast an event to all clients in a room (excluding an optional sender)."""
-        client_message = json.dumps(
-            {"room": room_name, "event": event_type, "data": payload}
-        )
+        client_message = json.dumps({"room": room_name, "event": event_type, "data": payload})
 
         # 1. Local delivery to active sockets in this process.
         await self._local_deliver(room_name, client_message, exclude=sender_ws)

@@ -3,13 +3,13 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-
 from src.models.auth import MemberStatus, OrgRole, SubscriptionTier, TeamRole
 
 
 class UserRegisterRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=1024)
     full_name: str = Field(min_length=2, max_length=255)
     organization_name: str | None = Field(default=None, min_length=2, max_length=255)
 
@@ -55,6 +55,7 @@ class UserUpdateRequest(BaseModel):
 
 # ── Organization ──────────────────────────────────────────────────────────────
 
+
 class OrgCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     slug: str | None = Field(default=None, min_length=2, max_length=100)
@@ -87,6 +88,7 @@ class MyOrgResponse(BaseModel):
 
 # ── Members ───────────────────────────────────────────────────────────────────
 
+
 class OrgMemberResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -106,11 +108,12 @@ class MemberInviteRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=1024)
     full_name: str = Field(min_length=2, max_length=255)
 
 
 # ── Workspace ─────────────────────────────────────────────────────────────────
+
 
 class WorkspaceCreateRequest(BaseModel):
     name: str = Field(min_length=2, max_length=255)
@@ -130,6 +133,7 @@ class WorkspaceResponse(BaseModel):
 
 
 # ── Departments & Teams ───────────────────────────────────────────────────────
+
 
 class DepartmentCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
@@ -180,3 +184,17 @@ class TeamMemberResponse(BaseModel):
     user_id: str
     role: TeamRole
     user: UserProfileResponse | None = None
+
+
+class MemberUpdateRequest(BaseModel):
+    role: OrgRole | None = None
+    status: MemberStatus | None = None
+
+
+class InviteResponse(OrgMemberResponse):
+    invite_token: str
+
+
+class OrgUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    logo_url: str | None = None

@@ -5,13 +5,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.exceptions import PermissionDeniedException
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.repositories.user_repo import UserRepository
 from src.schemas.time_tracking import (
     DailyActivitySummaryResponse,
+    ManualTimeEntryRequest,
     ScreenshotConfirmRequest,
     ScreenshotPresignedRequest,
     ScreenshotPresignedResponse,
@@ -21,6 +21,7 @@ from src.schemas.time_tracking import (
     TelemetryHeartbeatRequest,
     TelemetryHeartbeatResponse,
     TimeEntryResponse,
+    TimeEntryReviewRequest,
 )
 from src.services.time_service import TimeService
 
@@ -34,7 +35,9 @@ async def start_timer(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> TimeEntryResponse:
     """Start an active timer on a task."""
-    return await TimeService(db).start_timer(org_id=ctx.org_id, user_id=ctx.user.id, payload=payload)
+    return await TimeService(db).start_timer(
+        org_id=ctx.org_id, user_id=ctx.user.id, payload=payload
+    )
 
 
 @router.post("/timer/stop", response_model=TimeEntryResponse)
@@ -52,7 +55,7 @@ async def get_active_timer(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_READ_OWN))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> TimeEntryResponse | None:
-    return await TimeService(db).get_active_timer(user_id=ctx.user.id)
+    return await TimeService(db).get_active_timer(user_id=ctx.user.id, org_id=ctx.org_id)
 
 
 @router.post("/telemetry/heartbeat", response_model=TelemetryHeartbeatResponse)
@@ -62,7 +65,9 @@ async def send_telemetry_heartbeat(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> TelemetryHeartbeatResponse:
     """Ingest 30-second activity telemetry from desktop companion daemon."""
-    return await TimeService(db).ingest_telemetry(user_id=ctx.user.id, payload=payload)
+    return await TimeService(db).ingest_telemetry(
+        user_id=ctx.user.id, payload=payload, org_id=ctx.org_id
+    )
 
 
 @router.post("/screenshots/presigned-url", response_model=ScreenshotPresignedResponse)
@@ -96,7 +101,9 @@ async def delete_screenshot(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_LOG))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    return await TimeService(db).delete_screenshot(screenshot_id=screenshot_id, user_id=ctx.user.id)
+    return await TimeService(db).delete_screenshot(
+        screenshot_id=screenshot_id, user_id=ctx.user.id, org_id=ctx.org_id
+    )
 
 
 @router.get("/reports/daily", response_model=DailyActivitySummaryResponse)
@@ -120,4 +127,73 @@ async def get_daily_activity_report(
         if not membership:
             raise PermissionDeniedException("Target user is not a member of this organization")
         uid = target_user_id
-    return await TimeService(db).get_daily_activity_summary(user_id=uid, target_date=chosen_date)
+    return await TimeService(db).get_daily_activity_summary(
+        user_id=uid, target_date=chosen_date, org_id=ctx.org_id
+    )
+
+
+@router.get("/entries", response_model=list[TimeEntryResponse])
+async def list_entries(
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_READ_OWN))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    user_id: str | None = None,
+    status: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    all_members: bool = False,
+):
+    if (all_members or user_id and user_id != ctx.user.id) and not ctx.has_permission(
+        Permission.TIME_READ_ALL
+    ):
+        raise PermissionDeniedException("Requires time:read_all")
+    return await TimeService(db).list_entries(
+        ctx.org_id, user_id if all_members else user_id or ctx.user.id, status, limit, offset
+    )
+
+
+@router.post("/entries", response_model=TimeEntryResponse, status_code=201)
+async def manual_entry(
+    payload: ManualTimeEntryRequest,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_LOG))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await TimeService(db).manual_entry(ctx.org_id, ctx.user.id, payload)
+
+
+@router.post("/entries/{entry_id}/submit", response_model=TimeEntryResponse)
+async def submit_entry(
+    entry_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_LOG))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await TimeService(db).transition_entry(entry_id, ctx.org_id, ctx.user.id, "submit")
+
+
+@router.post("/entries/{entry_id}/recall", response_model=TimeEntryResponse)
+async def recall_entry(
+    entry_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_LOG))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await TimeService(db).transition_entry(entry_id, ctx.org_id, ctx.user.id, "recall")
+
+
+@router.post("/entries/{entry_id}/review", response_model=TimeEntryResponse)
+async def review_entry(
+    entry_id: str,
+    payload: TimeEntryReviewRequest,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_APPROVE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await TimeService(db).transition_entry(
+        entry_id, ctx.org_id, ctx.user.id, payload.status.value, payload.reason
+    )
+
+
+@router.delete("/entries/{entry_id}", status_code=204)
+async def delete_entry(
+    entry_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_LOG))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    await TimeService(db).delete_entry(entry_id, ctx.org_id, ctx.user.id)

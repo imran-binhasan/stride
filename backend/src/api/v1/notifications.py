@@ -2,9 +2,8 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.schemas.notifications import AuditLogResponse, MarkReadRequest, NotificationResponse

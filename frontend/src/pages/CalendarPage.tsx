@@ -5,11 +5,13 @@ import { api } from "../services/api";
 
 interface CalendarPageProps {
   project: Project;
+  onSelectTask?: (id: string) => void;
 }
 
-export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
+export const CalendarPage: React.FC<CalendarPageProps> = ({ project, onSelectTask }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth() + 1);
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [error, setError] = useState("");
   const [calendar, setCalendar] = useState<CalendarView | null>(null);
 
   // Refetch whenever the project or the selected month/year changes.
@@ -20,7 +22,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
       .then((cal) => {
         if (!cancelled) setCalendar(cal);
       })
-      .catch((e) => console.error("Failed to load calendar:", e));
+      .catch((e) => {if(!cancelled) setError(e.message);});
     return () => {
       cancelled = true;
     };
@@ -68,6 +70,8 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
 
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-950 p-6 select-none overflow-y-auto">
+      {error && <p role="alert" className="error mb-4">{error}</p>}
+      <button className="btn self-end mb-3" onClick={async () => {try {const blob=await api.calendarExport(project.id);const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='stride-calendar.ics';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError((e as Error).message);}}}>Export calendar</button>
       {/* Calendar Header */}
       <div className="flex items-center justify-between mb-6 shrink-0">
         <div>
@@ -78,6 +82,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
         {/* Month Navigation */}
         <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 rounded-xl p-1.5 shadow-sm">
           <button
+            aria-label="Previous month"
             onClick={handlePrevMonth}
             className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
           >
@@ -87,6 +92,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
             {monthNames[currentMonth - 1]} {currentYear}
           </span>
           <button
+            aria-label="Next month"
             onClick={handleNextMonth}
             className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
           >
@@ -113,6 +119,9 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
           return (
             <div
               key={idx}
+              data-date={day.dateStr || undefined}
+              onDragOver={e => {if(day.dateStr) e.preventDefault();}}
+              onDrop={async e => {e.preventDefault();const id=e.dataTransfer.getData('text/plain');if(id && day.dateStr) try{await api.updateTask(id,{due_date:day.dateStr});setCalendar(await api.getCalendar(project.id,currentMonth,currentYear));}catch(error){setError((error as Error).message);}}}
               className={`min-h-[110px] p-2.5 rounded-xl border flex flex-col justify-between transition-colors ${
                 day.dayNumber
                   ? "bg-slate-900/40 border-slate-800 hover:border-slate-700"
@@ -131,6 +140,12 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({ project }) => {
                 {events.map((ev) => (
                   <div
                     key={ev.id}
+                    draggable
+                    onDragStart={e => e.dataTransfer.setData('text/plain',ev.id)}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onSelectTask?.(ev.id)}
+                    onKeyDown={e => {if(e.key === "Enter") onSelectTask?.(ev.id);}}
                     className="p-1.5 rounded-md bg-slate-800/80 border border-slate-700/60 text-[11px] space-y-0.5"
                   >
                     <div className="flex items-center justify-between">

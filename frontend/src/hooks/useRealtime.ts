@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../services/api";
 
 export interface RealtimeMessage {
@@ -13,6 +13,7 @@ export interface RealtimeMessage {
  * the socket alive. Returns a `broadcast` fn so this client can notify others of changes.
  */
 export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage) => void) {
+  const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
@@ -30,6 +31,7 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
       wsRef.current = ws;
 
       ws.onopen = () => {
+        setConnected(false);
         ws.send(JSON.stringify({ action: "join_room", room }));
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -41,6 +43,8 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
+          if (msg.type === "ROOM_JOINED") {setConnected(true); onEventRef.current({room, event:"RECONNECTED",data:{}});}
+          if (msg.type === "ERROR") setConnected(false);
           if (msg && msg.event) onEventRef.current(msg as RealtimeMessage);
         } catch {
           /* ignore non-JSON frames */
@@ -48,6 +52,7 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
       };
 
       ws.onclose = () => {
+        if(!closed) setConnected(false);
         clearInterval(pingTimer);
         if (!closed) reconnectTimer = setTimeout(connect, 2000);
       };
@@ -59,6 +64,7 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
 
     return () => {
       closed = true;
+      setConnected(false);
       clearTimeout(reconnectTimer);
       clearInterval(pingTimer);
       wsRef.current?.close();
@@ -75,5 +81,5 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
     [room]
   );
 
-  return { broadcast };
+  return { broadcast, connected };
 }

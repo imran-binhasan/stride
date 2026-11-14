@@ -3,10 +3,11 @@ import { GanttChart, Project } from "../types";
 
 interface GanttPageProps {
   project: Project;
+  onSelectTask?: (id: string) => void;
   gantt: GanttChart | null;
 }
 
-export const GanttPage: React.FC<GanttPageProps> = ({ gantt }) => {
+export const GanttPage: React.FC<GanttPageProps> = ({ gantt, onSelectTask }) => {
   if (!gantt) {
     return (
       <div className="flex-1 flex items-center justify-center text-slate-500">
@@ -73,6 +74,10 @@ export const GanttPage: React.FC<GanttPageProps> = ({ gantt }) => {
             return (
               <div
                 key={node.id}
+                onClick={() => onSelectTask?.(node.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => {if(e.key === "Enter") onSelectTask?.(node.id);}}
                 className="flex items-center px-3 py-3 hover:bg-slate-800/30 transition-colors text-xs"
               >
                 {/* Task Label */}

@@ -9,15 +9,16 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 
-def test_websocket_realtime_connection():
+def test_websocket_realtime_connection(ws_identity):
     app = create_app()
     client = TestClient(app)
 
     token = create_access_token(
-        subject="test-user-id",
-        claims={"org_id": "test-org-id", "email": "ws@test.com"},
+        subject=ws_identity["user_id"],
+        claims={"org_id": ws_identity["org_id"]},
     )
 
+    own_room = f"room:org:{ws_identity['org_id']}:project:{ws_identity['project']['id']}"
     with client.websocket_connect(f"/api/v1/ws/realtime?token={token}") as ws:
         # Test ping / pong
         ws.send_text(json.dumps({"action": "ping"}))
@@ -25,15 +26,13 @@ def test_websocket_realtime_connection():
         assert response.get("type") == "pong"
 
         # Test join room
-        ws.send_text(json.dumps({"action": "join_room", "room": "room:org:test-org-id:project:p1"}))
+        ws.send_text(json.dumps({"action": "join_room", "room": own_room}))
         join_resp = json.loads(ws.receive_text())
         assert join_resp.get("type") == "ROOM_JOINED"
-        assert join_resp.get("room") == "room:org:test-org-id:project:p1"
+        assert join_resp.get("room") == own_room
 
         # Test leave room
-        ws.send_text(
-            json.dumps({"action": "leave_room", "room": "room:org:test-org-id:project:p1"})
-        )
+        ws.send_text(json.dumps({"action": "leave_room", "room": own_room}))
         leave_resp = json.loads(ws.receive_text())
         assert leave_resp.get("type") == "ROOM_LEFT"
 
@@ -42,6 +41,6 @@ def test_websocket_invalid_token_closed():
     app = create_app()
     client = TestClient(app)
 
-    with pytest.raises((WebSocketDisconnect, Exception)):
+    with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/api/v1/ws/realtime?token=invalid_token"):
             pass

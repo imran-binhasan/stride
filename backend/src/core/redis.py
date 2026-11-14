@@ -17,6 +17,12 @@ async def get_redis() -> aioredis.Redis:
     if _redis_client is not None:
         return _redis_client
 
+    if settings.ENVIRONMENT == "test":
+        import fakeredis.aioredis
+
+        _redis_client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        return _redis_client
+
     try:
         client = aioredis.from_url(
             settings.REDIS_URL,

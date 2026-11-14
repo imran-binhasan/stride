@@ -1,4 +1,5 @@
 """Unit tests for configuration, exceptions, database and redis layer."""
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession

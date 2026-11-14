@@ -4,7 +4,8 @@ from collections import defaultdict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import settings
-from src.core.exceptions import EntityNotFoundException
+from src.core.exceptions import ConflictException, EntityNotFoundException
+from src.models.task import DependencyType
 from src.repositories.project_repo import ProjectRepository
 from src.repositories.task_repo import TaskRepository
 from src.schemas.project import WorkflowStatusResponse
@@ -45,7 +46,11 @@ class ViewService:
         # Group tasks by status ID
         tasks_by_status: dict[str, list[TaskResponse]] = defaultdict(list)
         for task in tasks:
-            tasks_by_status[task.status_id].append(TaskResponse.model_validate(task))
+            tasks_by_status[task.status_id].append(
+                TaskResponse.model_validate(task).model_copy(
+                    update={"comments": [], "attachments": []}
+                )
+            )
 
         columns: list[KanbanColumnResponse] = []
         for status in project.statuses:
@@ -53,6 +58,8 @@ class ViewService:
             columns.append(
                 KanbanColumnResponse(
                     status=WorkflowStatusResponse.model_validate(status),
+                    wip_exceeded=status.wip_limit is not None
+                    and len(status_tasks) > status.wip_limit,
                     task_count=len(status_tasks),
                     tasks=status_tasks,
                 )
@@ -123,7 +130,9 @@ class ViewService:
         # Durations (default to 1 day or story points / 8 hours if specified)
         durations: dict[str, int] = {}
         for t in tasks:
-            if t.estimated_hours:
+            if t.start_date and t.due_date:
+                durations[t.id] = max(1, (t.due_date - t.start_date).days + 1)
+            elif t.estimated_hours:
                 durations[t.id] = max(1, int(round(t.estimated_hours / 8.0)))
             elif t.story_points:
                 durations[t.id] = max(1, int(round(t.story_points)))
@@ -136,6 +145,11 @@ class ViewService:
 
         for t in tasks:
             for dep in t.dependencies_out:
+                if (
+                    dep.dependency_type != DependencyType.BLOCKS
+                    or dep.successor_id not in durations
+                ):
+                    continue
                 preds[dep.successor_id].append((t.id, dep.lag_days))
                 succs[t.id].append((dep.successor_id, dep.lag_days))
 
@@ -143,6 +157,11 @@ class ViewService:
         in_degree: dict[str, int] = {t.id: 0 for t in tasks}
         for t in tasks:
             for dep in t.dependencies_out:
+                if (
+                    dep.dependency_type != DependencyType.BLOCKS
+                    or dep.successor_id not in durations
+                ):
+                    continue
                 in_degree[dep.successor_id] = in_degree.get(dep.successor_id, 0) + 1
 
         queue = [tid for tid, deg in in_degree.items() if deg == 0]
@@ -156,10 +175,8 @@ class ViewService:
                 if in_degree[succ_id] == 0:
                     queue.append(succ_id)
 
-        # Fallback if any unvisited nodes remain
-        for t in tasks:
-            if t.id not in topo_order:
-                topo_order.append(t.id)
+        if len(topo_order) != len(tasks):
+            raise ConflictException("Blocking dependency graph contains a cycle")
 
         # 1. Forward Pass (ES & EF)
         early_start: dict[str, int] = {}

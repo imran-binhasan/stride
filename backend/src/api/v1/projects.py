@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.schemas.project import (
@@ -20,6 +19,7 @@ from src.schemas.project import (
     SprintUpdate,
     WorkflowStatusCreate,
     WorkflowStatusResponse,
+    WorkflowStatusUpdate,
 )
 from src.services.project_service import ProjectService
 
@@ -35,6 +35,26 @@ async def create_project(
     return await ProjectService(db).create_project(
         org_id=ctx.org_id, creator_id=ctx.user.id, payload=payload
     )
+
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+
+
+@router.post("/labels", response_model=LabelResponse, status_code=status.HTTP_201_CREATED)
+async def create_label(
+    payload: LabelCreate,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> LabelResponse:
+    return await ProjectService(db).create_label(org_id=ctx.org_id, payload=payload)
+
+
+@router.get("/labels", response_model=list[LabelResponse])
+async def list_labels(
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_READ))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> list[LabelResponse]:
+    return await ProjectService(db).list_labels(org_id=ctx.org_id)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
@@ -66,9 +86,10 @@ async def list_workspace_projects(
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ProjectResponse]:
-    return await ProjectService(db).list_workspace_projects(
+    projects = await ProjectService(db).list_workspace_projects(
         workspace_id=workspace_id, org_id=ctx.org_id, limit=limit, offset=offset
     )
+    return [p for p in projects if ctx.can_access_project(p.id)]
 
 
 @router.post(
@@ -98,6 +119,7 @@ async def delete_workflow_status(
 
 # ── Sprints ───────────────────────────────────────────────────────────────────
 
+
 @router.post(
     "/{project_id}/sprints", response_model=SprintResponse, status_code=status.HTTP_201_CREATED
 )
@@ -124,29 +146,13 @@ async def update_sprint(
     )
 
 
-# ── Labels ────────────────────────────────────────────────────────────────────
-
-@router.post("/labels", response_model=LabelResponse, status_code=status.HTTP_201_CREATED)
-async def create_label(
-    payload: LabelCreate,
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE))],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> LabelResponse:
-    return await ProjectService(db).create_label(org_id=ctx.org_id, payload=payload)
-
-
-@router.get("/labels", response_model=list[LabelResponse])
-async def list_labels(
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_READ))],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> list[LabelResponse]:
-    return await ProjectService(db).list_labels(org_id=ctx.org_id)
-
-
 # ── Project Access Grants ─────────────────────────────────────────────────────
 
+
 @router.post(
-    "/{project_id}/access", response_model=ProjectAccessGrantResponse, status_code=status.HTTP_201_CREATED
+    "/{project_id}/access",
+    response_model=ProjectAccessGrantResponse,
+    status_code=status.HTTP_201_CREATED,
 )
 async def add_project_access(
     project_id: str,
@@ -165,6 +171,90 @@ async def list_project_access(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_READ))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ProjectAccessGrantResponse]:
-    return await ProjectService(db).list_access_grants(
-        project_id=project_id, org_id=ctx.org_id
+    return await ProjectService(db).list_access_grants(project_id=project_id, org_id=ctx.org_id)
+
+
+@router.patch("/{project_id}/statuses/{status_id}", response_model=WorkflowStatusResponse)
+async def update_workflow_status(
+    project_id: str,
+    status_id: str,
+    payload: WorkflowStatusUpdate,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    from src.core.exceptions import EntityNotFoundException, ValidationException
+    from src.repositories.project_repo import ProjectRepository
+
+    await ProjectService(db).get_project(project_id, ctx.org_id)
+    state = await ProjectRepository(db).get_status_by_id(status_id)
+    if not state or state.project_id != project_id:
+        raise EntityNotFoundException("WorkflowStatus", status_id)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if key != "wip_limit" and value is None:
+            raise ValidationException(f"{key} cannot be null")
+        setattr(state, key, value)
+    await db.flush()
+    return WorkflowStatusResponse.model_validate(state)
+
+
+@router.get("/{project_id}/sprints", response_model=list[SprintResponse])
+async def list_sprints(
+    project_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.SPRINT_READ))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    project = await ProjectService(db).get_project(project_id, ctx.org_id)
+    return project.sprints
+
+
+@router.get("/{project_id}/sprints/{sprint_id}/metrics")
+async def sprint_metrics(
+    project_id: str,
+    sprint_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.SPRINT_READ))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    from sqlalchemy import select
+    from src.core.exceptions import EntityNotFoundException
+    from src.models.project import StatusCategory, WorkflowStatus
+    from src.models.task import Task
+    from src.repositories.project_repo import ProjectRepository
+
+    await ProjectService(db).get_project(project_id, ctx.org_id)
+    sprint = await ProjectRepository(db).get_sprint_by_id(sprint_id)
+    if not sprint or sprint.project_id != project_id:
+        raise EntityNotFoundException("Sprint", sprint_id)
+    rows = (
+        await db.execute(
+            select(Task.story_points, WorkflowStatus.category)
+            .join(WorkflowStatus, Task.status_id == WorkflowStatus.id)
+            .where(
+                Task.org_id == ctx.org_id,
+                Task.project_id == project_id,
+                Task.sprint_id == sprint_id,
+                Task.parent_task_id.is_(None),
+            )
+        )
+    ).all()
+    return {
+        "sprint_id": sprint_id,
+        "total_tasks": len(rows),
+        "completed_tasks": sum(category == StatusCategory.DONE for _, category in rows),
+        "total_points": sum(points or 0 for points, _ in rows),
+        "completed_points": sum(
+            points or 0 for points, category in rows if category == StatusCategory.DONE
+        ),
+    }
+
+
+@router.delete("/{project_id}", status_code=204)
+async def archive_project(
+    project_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_DELETE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    from src.models.project import ProjectStatus
+
+    await ProjectService(db).update_project(
+        project_id, ctx.org_id, ProjectUpdate(status=ProjectStatus.ARCHIVED)
     )

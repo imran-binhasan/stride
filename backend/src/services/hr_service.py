@@ -1,9 +1,6 @@
 """HR business logic — EmployeeProfile, LeaveRequest, Payroll."""
 
-from datetime import UTC, datetime
-
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.exceptions import ConflictException, EntityNotFoundException, ValidationException
 from src.models.hr import LeaveStatus, PayrollStatus
 from src.repositories.hr_repo import HRRepository
@@ -26,7 +23,9 @@ class HRService:
 
     # ── Employee Profiles ─────────────────────────────────────────────────────
 
-    async def create_profile(self, org_id: str, payload: EmployeeProfileCreate) -> EmployeeProfileResponse:
+    async def create_profile(
+        self, org_id: str, payload: EmployeeProfileCreate
+    ) -> EmployeeProfileResponse:
         existing = await self.repo.get_profile_by_user(org_id=org_id, user_id=payload.user_id)
         if existing:
             raise ConflictException("Employee profile already exists for this user")

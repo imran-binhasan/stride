@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
 from src.models.hr import LeaveStatus
@@ -25,7 +24,10 @@ router = APIRouter(prefix="/hr", tags=["HR"])
 
 # ── Employee Profiles ─────────────────────────────────────────────────────────
 
-@router.post("/employees", response_model=EmployeeProfileResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/employees", response_model=EmployeeProfileResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_employee_profile(
     payload: EmployeeProfileCreate,
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.HR_MANAGE))],
@@ -65,6 +67,7 @@ async def update_employee_profile(
 
 # ── Leave Requests ────────────────────────────────────────────────────────────
 
+
 @router.post("/leaves", response_model=LeaveRequestResponse, status_code=status.HTTP_201_CREATED)
 async def request_leave(
     payload: LeaveRequestCreate,
@@ -74,13 +77,13 @@ async def request_leave(
     """Submit a leave request for the acting employee."""
     service = HRService(db)
     from src.repositories.hr_repo import HRRepository
+
     profile = await HRRepository(db).get_profile_by_user(ctx.org_id, ctx.user.id)
     if not profile:
         from src.core.exceptions import EntityNotFoundException
+
         raise EntityNotFoundException("EmployeeProfile", ctx.user.id)
-    return await service.request_leave(
-        org_id=ctx.org_id, employee_id=profile.id, payload=payload
-    )
+    return await service.request_leave(org_id=ctx.org_id, employee_id=profile.id, payload=payload)
 
 
 @router.get("/leaves", response_model=list[LeaveRequestResponse])
@@ -89,9 +92,7 @@ async def list_leave_requests(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     status_filter: Annotated[LeaveStatus | None, Query(alias="status")] = None,
 ) -> list[LeaveRequestResponse]:
-    return await HRService(db).list_leave_requests(
-        org_id=ctx.org_id, status=status_filter
-    )
+    return await HRService(db).list_leave_requests(org_id=ctx.org_id, status=status_filter)
 
 
 @router.patch("/leaves/{leave_id}", response_model=LeaveRequestResponse)
@@ -108,7 +109,10 @@ async def review_leave_request(
 
 # ── Payroll ────────────────────────────────────────────────────────────────────
 
-@router.post("/payroll/runs", response_model=PayrollRunResponse, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/payroll/runs", response_model=PayrollRunResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_payroll_run(
     payload: PayrollRunCreate,
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.PAYROLL_RUN))],

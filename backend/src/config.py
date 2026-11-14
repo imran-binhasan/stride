@@ -1,4 +1,5 @@
 """Application settings and environment configuration."""
+
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # S3 Object Storage Config
+    S3_PUBLIC_ENDPOINT_URL: str | None = None
     S3_ENDPOINT_URL: str | None = None
     S3_ACCESS_KEY: str = "minioadmin"
     S3_SECRET_KEY: str = "minioadmin"
@@ -71,6 +73,9 @@ class Settings(BaseSettings):
     FIGMA_API_ACCESS_TOKEN: str | None = None
 
     # AI Pipeline Engine Config
+    AI_RUNNER_URL: str | None = None
+    AI_RUNNER_TOKEN: str | None = None
+    AI_RUNNER_TIMEOUT_SECONDS: float = 60.0
     AI_GATE_STRICT_MODE: bool = True
     AI_DEFAULT_MODEL: str = "gemini-1.5-pro"
 
@@ -104,8 +109,7 @@ class Settings(BaseSettings):
             insecure.append("S3_SECRET_KEY")
         if insecure:
             raise ValueError(
-                "Insecure default secret(s) may not be used in production: "
-                + ", ".join(insecure)
+                "Insecure default secret(s) may not be used in production: " + ", ".join(insecure)
             )
         return self
 

@@ -7,14 +7,13 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
 from src.core.security import hash_token
 from src.models.auth import (
     Department,
     MemberStatus,
+    Organization,
     OrgMember,
     OrgRole,
-    Organization,
     RefreshToken,
     Team,
     TeamMember,
@@ -121,9 +120,14 @@ class UserRepository:
         org_id: str,
         user_id: str,
         role: OrgRole,
-        email: str,
+        email: str | None = None,
         status: MemberStatus = MemberStatus.ACTIVE,
     ) -> OrgMember:
+        if email is None:
+            user = await self.get_by_id(user_id)
+            if not user:
+                raise ValueError("Member user does not exist")
+            email = user.email
         member = OrgMember(
             org_id=org_id,
             user_id=user_id,
@@ -163,10 +167,14 @@ class UserRepository:
         return member
 
     async def get_invite_by_token(self, token: str) -> OrgMember | None:
-        stmt = select(OrgMember).where(
-            OrgMember.invite_token == hash_token(token),
-            OrgMember.status == MemberStatus.PENDING,
-            OrgMember.invite_expires_at > datetime.now(UTC),
+        stmt = (
+            select(OrgMember)
+            .with_for_update()
+            .where(
+                OrgMember.invite_token == hash_token(token),
+                OrgMember.status == MemberStatus.PENDING,
+                OrgMember.invite_expires_at > datetime.now(UTC),
+            )
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -210,9 +218,7 @@ class UserRepository:
 
     async def list_workspaces(self, org_id: str) -> list[Workspace]:
         stmt = (
-            select(Workspace)
-            .where(Workspace.org_id == org_id)
-            .order_by(Workspace.created_at.asc())
+            select(Workspace).where(Workspace.org_id == org_id).order_by(Workspace.created_at.asc())
         )
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
@@ -234,9 +240,15 @@ class UserRepository:
     # ── Departments ───────────────────────────────────────────────────────────
 
     async def create_department(
-        self, org_id: str, name: str, description: str | None = None, head_user_id: str | None = None
+        self,
+        org_id: str,
+        name: str,
+        description: str | None = None,
+        head_user_id: str | None = None,
     ) -> Department:
-        dept = Department(org_id=org_id, name=name.strip(), description=description, head_user_id=head_user_id)
+        dept = Department(
+            org_id=org_id, name=name.strip(), description=description, head_user_id=head_user_id
+        )
         self.db.add(dept)
         await self.db.flush()
         await self.db.refresh(dept)
@@ -297,7 +309,9 @@ class UserRepository:
 
     # ── Refresh Tokens ────────────────────────────────────────────────────────
 
-    async def save_refresh_token(self, user_id: str, token: str, expires_at: datetime) -> RefreshToken:
+    async def save_refresh_token(
+        self, user_id: str, token: str, expires_at: datetime
+    ) -> RefreshToken:
         rt = RefreshToken(user_id=user_id, token=hash_token(token), expires_at=expires_at)
         self.db.add(rt)
         await self.db.flush()
@@ -306,6 +320,7 @@ class UserRepository:
     async def get_refresh_token(self, token: str) -> RefreshToken | None:
         stmt = (
             select(RefreshToken)
+            .with_for_update(of=RefreshToken)
             .where(
                 RefreshToken.token == hash_token(token),
                 RefreshToken.revoked.is_(False),

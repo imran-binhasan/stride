@@ -65,7 +65,15 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app = create_app()
 
     async def override_get_db():
-        yield db_session
+        try:
+            yield db_session
+            await db_session.commit()
+            from src.core.events import publish_changes
+
+            await publish_changes(db_session)
+        except Exception:
+            await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_db_session] = override_get_db
 
@@ -135,3 +143,12 @@ def make_tenant(client: AsyncClient):
         }
 
     return _make
+
+
+@pytest_asyncio.fixture
+async def ws_identity(make_tenant, monkeypatch):
+    import src.api.v1.ws as ws_module
+
+    tenant = await make_tenant("socket-user@test.io", key="SOC")
+    monkeypatch.setattr(ws_module, "async_session_factory", TestSessionLocal)
+    return tenant

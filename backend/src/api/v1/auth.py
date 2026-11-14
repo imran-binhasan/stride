@@ -14,6 +14,7 @@ from src.schemas.auth import (
     UserLoginRequest,
     UserProfileResponse,
     UserRegisterRequest,
+    UserUpdateRequest,
 )
 from src.services.auth_service import AuthService
 
@@ -85,3 +86,12 @@ async def get_current_user_profile(
 ) -> UserProfileResponse:
     """Retrieve profile of the currently authenticated user."""
     return UserProfileResponse.model_validate(current_user)
+
+
+@router.patch("/me", response_model=UserProfileResponse)
+async def update_profile(
+    payload: UserUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await AuthService(db).update_profile(current_user, payload)

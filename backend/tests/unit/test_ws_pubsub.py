@@ -82,9 +82,7 @@ async def test_worker_does_not_receive_other_orgs_broadcasts():
 
     try:
         # Broadcast for a different org entirely.
-        await worker_a.broadcast_to_room(
-            OTHER_ROOM, "TASK_UPDATED", {"id": "X"}, org_id="evilcorp"
-        )
+        await worker_a.broadcast_to_room(OTHER_ROOM, "TASK_UPDATED", {"id": "X"}, org_id="evilcorp")
         await asyncio.sleep(0.7)
         assert ws_b.sent == []  # never delivered cross-org
     finally:

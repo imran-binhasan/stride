@@ -47,18 +47,30 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", 'mc alias set health http://localhost:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null && mc ready health']
       interval: 5s
       timeout: 5s
       retries: 5
+
+  storage-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'mc alias set stride http://minio:9000 "$${S3_ACCESS_KEY}" "$${S3_SECRET_KEY}" && mc mb --ignore-existing stride/stride-storage'
 
   # One-shot migration runner — completes before the API starts (safe for multi-replica).
   migrate:
@@ -76,6 +88,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
@@ -89,11 +103,17 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_USE_FAKE_IF_UNAVAILABLE: "false"
       S3_ENDPOINT_URL: http://minio:9000
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
       S3_BUCKET_NAME: stride-storage
-      JWT_SECRET_KEY: change-me-in-production-min-32-characters-long
-      BACKEND_CORS_ORIGINS: "http://localhost:5173"
+      FIGMA_API_ACCESS_TOKEN: ${FIGMA_API_ACCESS_TOKEN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      AI_RUNNER_URL: ${AI_RUNNER_URL:-}
+      AI_RUNNER_TOKEN: ${AI_RUNNER_TOKEN:-}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?Set GITHUB_WEBHOOK_SECRET}
+      BACKEND_CORS_ORIGINS: '["http://localhost:3000"]'
     ports:
       - "8000:8000"
 

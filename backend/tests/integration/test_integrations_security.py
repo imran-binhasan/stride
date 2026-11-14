@@ -34,7 +34,9 @@ async def test_webhook_rejects_missing_signature(client: AsyncClient, production
 @pytest.mark.asyncio
 async def test_webhook_accepts_valid_signature(client: AsyncClient, production_webhook):
     secret = production_webhook
-    body = json.dumps({"repository": {"name": "x", "owner": {"login": "y"}}, "commits": []}).encode()
+    body = json.dumps(
+        {"repository": {"name": "x", "owner": {"login": "y"}}, "commits": []}
+    ).encode()
     sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     r = await client.post(
         "/api/v1/integrations/github/webhook",

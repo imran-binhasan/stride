@@ -17,7 +17,7 @@ def test_enabled_providers_filters_and_orders(monkeypatch):
 def test_extract_json_tolerates_fences_and_prose():
     assert llm._extract_json('{"a": 1}') == {"a": 1}
     assert llm._extract_json('```json\n{"a": 2}\n```') == {"a": 2}
-    assert llm._extract_json("Sure! Here you go: {\"a\": 3} hope that helps") == {"a": 3}
+    assert llm._extract_json('Sure! Here you go: {"a": 3} hope that helps') == {"a": 3}
     assert llm._extract_json("no json here") is None
 
 

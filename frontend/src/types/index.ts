@@ -1,4 +1,4 @@
-export type OrgRole = 'ORG_OWNER' | 'ORG_ADMIN' | 'PROJECT_MANAGER' | 'MEMBER' | 'GUEST';
+export type OrgRole = 'ORG_OWNER' | 'ORG_ADMIN' | 'MANAGER' | 'MEMBER' | 'CLIENT';
 export type TaskPriority = 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW';
 export type DependencyType = 'BLOCKS' | 'BLOCKED_BY' | 'RELATES_TO';
 export type StatusCategory = 'BACKLOG' | 'TODO' | 'IN_PROGRESS' | 'IN_REVIEW' | 'DONE';
@@ -37,6 +37,7 @@ export interface WorkflowStatus {
   category: StatusCategory;
   color: string;
   position: number;
+  wip_limit?: number | null;
 }
 
 export interface Project {
@@ -50,6 +51,7 @@ export interface Project {
   task_counter: number;
   created_at: string;
   statuses: WorkflowStatus[];
+  sprints?: Sprint[];
 }
 
 export interface Subtask {
@@ -82,6 +84,7 @@ export interface Task {
   priority: TaskPriority;
   story_points?: number | null;
   estimated_hours?: number | null;
+  start_date?: string | null;
   due_date?: string | null;
   position: number;
   custom_fields: Record<string, any>;
@@ -92,12 +95,16 @@ export interface Task {
   status?: WorkflowStatus;
   assignee?: UserProfile | null;
   subtasks: Subtask[];
+  children?: Subtask[];
+  comments?: TaskComment[];
+  attachments?: Attachment[];
   dependencies_out: TaskDependency[];
   dependencies_in: TaskDependency[];
 }
 
 export interface KanbanColumn {
   status: WorkflowStatus;
+  wip_exceeded?: boolean;
   task_count: number;
   tasks: Task[];
 }
@@ -236,7 +243,8 @@ export interface Gate5Response {
   static_analysis_passed: boolean;
   tests_executed: number;
   tests_passed: number;
-  coverage_percent: number;
+  coverage_percent: number | null;
+  execution_status?: string;
   summary: string;
 }
 
@@ -248,3 +256,22 @@ export interface FullAIPipelineResponse {
   gate4_tdd: Gate4Response;
   gate5_execution: Gate5Response;
 }
+
+
+export interface Sprint {
+  id: string; project_id: string; name: string; goal?: string | null;
+  start_date?: string | null; end_date?: string | null;
+  status: 'PLANNED' | 'ACTIVE' | 'COMPLETED';
+}
+export interface OrgMember {
+  id: string; org_id: string; email: string; role: OrgRole;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'REMOVED'; user?: UserProfile | null;
+}
+export interface TaskComment { id: string; content: string; author_id: string; author?: UserProfile; created_at: string; is_internal: boolean }
+export interface Attachment { id: string; file_name: string; file_size: number; mime_type: string }
+export interface ChecklistItem { id: string; title: string; is_completed: boolean; position: number }
+export interface TimeEntry extends ActiveTimer {
+  org_id: string; user_id: string; idle_seconds: number; activity_percent: number;
+  status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+}
+export interface TableResult { items: Task[]; total: number; limit: number; offset: number }

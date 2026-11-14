@@ -1,9 +1,8 @@
 """Project, Sprint, Label, and Project Access business logic."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.exceptions import ConflictException, EntityNotFoundException, ValidationException
-from src.models.project import GranteeType, SprintStatus, StatusCategory
+from src.models.project import SprintStatus, StatusCategory
 from src.repositories.project_repo import ProjectRepository
 from src.schemas.project import (
     LabelCreate,
@@ -27,8 +26,18 @@ class ProjectService:
         self.repo = ProjectRepository(db)
 
     async def create_project(
-        self, org_id: str, creator_id: str, payload: ProjectCreate
+        self, org_id: str, payload: ProjectCreate, creator_id: str | None = None
     ) -> ProjectResponse:
+        from sqlalchemy import select
+        from src.models.auth import Workspace
+
+        workspace = await self.db.scalar(
+            select(Workspace).where(
+                Workspace.id == payload.workspace_id, Workspace.org_id == org_id
+            )
+        )
+        if not workspace:
+            raise EntityNotFoundException("Workspace", payload.workspace_id)
         existing = await self.repo.get_by_key(payload.key, org_id=org_id)
         if existing:
             raise ConflictException(
@@ -51,13 +60,15 @@ class ProjectService:
         )
 
         for name, category, color, pos in [
-            ("Backlog",     StatusCategory.BACKLOG,      "#9CA3AF", 0),
-            ("To Do",       StatusCategory.TODO,         "#3B82F6", 1),
-            ("In Progress", StatusCategory.IN_PROGRESS,  "#F59E0B", 2),
-            ("In Review",   StatusCategory.IN_REVIEW,    "#8B5CF6", 3),
-            ("Done",        StatusCategory.DONE,         "#10B981", 4),
+            ("Backlog", StatusCategory.BACKLOG, "#9CA3AF", 0),
+            ("To Do", StatusCategory.TODO, "#3B82F6", 1),
+            ("In Progress", StatusCategory.IN_PROGRESS, "#F59E0B", 2),
+            ("In Review", StatusCategory.IN_REVIEW, "#8B5CF6", 3),
+            ("Done", StatusCategory.DONE, "#10B981", 4),
         ]:
-            await self.repo.add_workflow_status(project_id=project.id, name=name, category=category, color=color, position=pos)
+            await self.repo.add_workflow_status(
+                project_id=project.id, name=name, category=category, color=color, position=pos
+            )
 
         fresh = await self.repo.get_by_id(project.id, org_id=org_id)
         return ProjectResponse.model_validate(fresh)
@@ -71,7 +82,9 @@ class ProjectService:
     async def list_workspace_projects(
         self, workspace_id: str, org_id: str, limit: int = 100, offset: int = 0
     ) -> list[ProjectResponse]:
-        projects = await self.repo.list_by_workspace(workspace_id, org_id=org_id, limit=limit, offset=offset)
+        projects = await self.repo.list_by_workspace(
+            workspace_id, org_id=org_id, limit=limit, offset=offset
+        )
         return [ProjectResponse.model_validate(p) for p in projects]
 
     async def update_project(
@@ -98,6 +111,7 @@ class ProjectService:
             category=payload.category,
             color=payload.color,
             position=payload.position,
+            wip_limit=payload.wip_limit,
         )
         return WorkflowStatusResponse.model_validate(status)
 
@@ -110,15 +124,24 @@ class ProjectService:
             raise EntityNotFoundException("Project", status.project_id)
         if len(project.statuses) <= 1:
             raise ValidationException("A project must maintain at least one workflow status")
+        from sqlalchemy import select
+        from src.models.task import Task
+
+        if await self.db.scalar(select(Task.id).where(Task.status_id == status_id).limit(1)):
+            raise ConflictException("Move all tasks out of this status before deleting it")
         deleted = await self.repo.delete_workflow_status(status_id)
         return {"success": deleted, "deleted_status_id": status_id}
 
     # ── Sprints ───────────────────────────────────────────────────────────────
 
-    async def create_sprint(self, project_id: str, org_id: str, payload: SprintCreate) -> SprintResponse:
+    async def create_sprint(
+        self, project_id: str, org_id: str, payload: SprintCreate
+    ) -> SprintResponse:
         project = await self.repo.get_by_id(project_id, org_id=org_id)
         if not project:
             raise EntityNotFoundException("Project", project_id)
+        if payload.start_date and payload.end_date and payload.end_date < payload.start_date:
+            raise ValidationException("Sprint end date must not precede its start date")
         sprint = await self.repo.create_sprint(
             project_id=project.id,
             name=payload.name,
@@ -138,6 +161,9 @@ class ProjectService:
         if not project:
             raise EntityNotFoundException("Project", sprint.project_id)
 
+        start, end = payload.start_date or sprint.start_date, payload.end_date or sprint.end_date
+        if start and end and end < start:
+            raise ValidationException("Sprint end date must not precede its start date")
         if payload.status == SprintStatus.ACTIVE:
             # Only one active sprint per project
             for s in project.sprints:
@@ -157,7 +183,7 @@ class ProjectService:
 
     async def list_labels(self, org_id: str) -> list[LabelResponse]:
         labels = await self.repo.list_labels(org_id)
-        return [LabelResponse.model_validate(l) for l in labels]
+        return [LabelResponse.model_validate(label) for label in labels]
 
     # ── Project Access Grants ─────────────────────────────────────────────────
 
@@ -167,6 +193,28 @@ class ProjectService:
         project = await self.repo.get_by_id(project_id, org_id=org_id)
         if not project:
             raise EntityNotFoundException("Project", project_id)
+        from sqlalchemy import select
+        from src.models.auth import MemberStatus
+        from src.models.project import GranteeType, ProjectAccessGrant
+        from src.repositories.user_repo import UserRepository
+
+        if payload.grantee_type == GranteeType.USER:
+            member = await UserRepository(self.db).get_org_membership(org_id, payload.grantee_id)
+            valid = member and member.status == MemberStatus.ACTIVE
+        else:
+            valid = await UserRepository(self.db).get_team_by_id(payload.grantee_id, org_id)
+        if not valid:
+            raise ValidationException(
+                "Access grants must reference an active member or team in this organization"
+            )
+        if await self.db.scalar(
+            select(ProjectAccessGrant.id).where(
+                ProjectAccessGrant.project_id == project_id,
+                ProjectAccessGrant.grantee_type == payload.grantee_type,
+                ProjectAccessGrant.grantee_id == payload.grantee_id,
+            )
+        ):
+            raise ConflictException("Access grant already exists")
         grant = await self.repo.add_access_grant(
             project_id=project_id,
             grantee_type=payload.grantee_type,
@@ -175,7 +223,9 @@ class ProjectService:
         )
         return ProjectAccessGrantResponse.model_validate(grant)
 
-    async def list_access_grants(self, project_id: str, org_id: str) -> list[ProjectAccessGrantResponse]:
+    async def list_access_grants(
+        self, project_id: str, org_id: str
+    ) -> list[ProjectAccessGrantResponse]:
         project = await self.repo.get_by_id(project_id, org_id=org_id)
         if not project:
             raise EntityNotFoundException("Project", project_id)

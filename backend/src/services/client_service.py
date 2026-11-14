@@ -1,7 +1,6 @@
 """Client Portal business logic."""
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.core.exceptions import ConflictException, EntityNotFoundException
 from src.repositories.client_repo import ClientRepository
 from src.schemas.client import (
@@ -18,7 +17,16 @@ class ClientService:
         self.db = db
         self.repo = ClientRepository(db)
 
-    async def create_contact(self, org_id: str, payload: ClientContactCreate) -> ClientContactResponse:
+    async def create_contact(
+        self, org_id: str, payload: ClientContactCreate
+    ) -> ClientContactResponse:
+        from src.core.exceptions import ValidationException
+        from src.models.auth import MemberStatus
+        from src.repositories.user_repo import UserRepository
+
+        member = await UserRepository(self.db).get_org_membership(org_id, payload.user_id)
+        if not member or member.status != MemberStatus.ACTIVE:
+            raise ValidationException("Client must be an active organization member")
         existing = await self.repo.get_contact_by_user(payload.user_id, org_id)
         if existing:
             raise ConflictException("A client contact already exists for this user")
@@ -60,6 +68,10 @@ class ClientService:
         if not contact:
             raise EntityNotFoundException("ClientContact", contact_id)
 
+        from src.repositories.project_repo import ProjectRepository
+
+        if not await ProjectRepository(self.db).get_by_id(payload.project_id, org_id=org_id):
+            raise EntityNotFoundException("Project", payload.project_id)
         existing = await self.repo.get_project_access(contact_id, payload.project_id)
         if existing:
             raise ConflictException("Client already has access to this project")
@@ -74,7 +86,17 @@ class ClientService:
         )
         return ClientProjectAccessResponse.model_validate(access)
 
-    async def revoke_project_access(self, access_id: str) -> dict:
+    async def revoke_project_access(self, access_id: str, org_id: str) -> dict:
+        from sqlalchemy import select
+        from src.models.client import ClientContact, ClientProjectAccess
+
+        access = await self.db.scalar(
+            select(ClientProjectAccess)
+            .join(ClientContact)
+            .where(ClientProjectAccess.id == access_id, ClientContact.org_id == org_id)
+        )
+        if not access:
+            raise EntityNotFoundException("ClientProjectAccess", access_id)
         success = await self.repo.revoke_project_access(access_id)
         if not success:
             raise EntityNotFoundException("ClientProjectAccess", access_id)

@@ -5,7 +5,6 @@ from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.models.notifications import AuditLog, Notification
 from src.schemas.notifications import AuditLogResponse, NotificationResponse
 

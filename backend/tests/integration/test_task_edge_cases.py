@@ -39,9 +39,7 @@ async def test_update_all_task_fields(client: AsyncClient, make_tenant):
 @pytest.mark.asyncio
 async def test_update_nonexistent_task_404(client: AsyncClient, make_tenant):
     t = await make_tenant("edge-upd404@test.io", key="E44")
-    r = await client.patch(
-        "/api/v1/tasks/nope", json={"title": "x"}, headers=t["headers"]
-    )
+    r = await client.patch("/api/v1/tasks/nope", json={"title": "x"}, headers=t["headers"])
     assert r.status_code == 404
 
 
@@ -129,7 +127,5 @@ async def test_assign_to_non_member_rejected(client: AsyncClient, make_tenant):
 @pytest.mark.asyncio
 async def test_stop_timer_when_none_active_422(client: AsyncClient, make_tenant):
     t = await make_tenant("edge-timer@test.io", key="ETM")
-    r = await client.post(
-        "/api/v1/time-tracking/timer/stop", json={}, headers=t["headers"]
-    )
+    r = await client.post("/api/v1/time-tracking/timer/stop", json={}, headers=t["headers"])
     assert r.status_code == 422

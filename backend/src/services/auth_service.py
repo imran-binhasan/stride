@@ -4,16 +4,20 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.config import settings
-from src.core.exceptions import AuthenticationError, ConflictException, EntityNotFoundException
+from src.core.exceptions import (
+    AuthenticationError,
+    ConflictException,
+    EntityNotFoundException,
+    ValidationException,
+)
 from src.core.security import (
     create_access_token,
     generate_refresh_token,
     hash_password,
     verify_password,
 )
-from src.models.auth import MemberStatus, OrgRole, TeamRole, User
+from src.models.auth import MemberStatus, OrgRole, User
 from src.repositories.user_repo import UserRepository
 from src.schemas.auth import (
     AcceptInviteRequest,
@@ -69,9 +73,13 @@ class AuthService:
             role=OrgRole.ORG_OWNER,
             status=MemberStatus.ACTIVE,
         )
-        await self.repo.create_workspace(org_id=org.id, name="General", description="Default Workspace")
+        await self.repo.create_workspace(
+            org_id=org.id, name="General", description="Default Workspace"
+        )
 
-        token_response = await self._generate_token_pair(user, active_org_id=org.id, role=OrgRole.ORG_OWNER)
+        token_response = await self._generate_token_pair(
+            user, active_org_id=org.id, role=OrgRole.ORG_OWNER
+        )
         return UserProfileResponse.model_validate(user), token_response
 
     async def login(self, payload: UserLoginRequest) -> TokenResponse:
@@ -89,7 +97,9 @@ class AuthService:
         default_org_id = active[0].org_id if active else None
         default_role = active[0].role if active else None
 
-        return await self._generate_token_pair(user, active_org_id=default_org_id, role=default_role)
+        return await self._generate_token_pair(
+            user, active_org_id=default_org_id, role=default_role
+        )
 
     async def refresh_tokens(self, refresh_token_str: str) -> TokenResponse:
         rt = await self.repo.get_refresh_token(refresh_token_str)
@@ -105,7 +115,9 @@ class AuthService:
         default_org_id = active[0].org_id if active else None
         default_role = active[0].role if active else None
 
-        return await self._generate_token_pair(user, active_org_id=default_org_id, role=default_role)
+        return await self._generate_token_pair(
+            user, active_org_id=default_org_id, role=default_role
+        )
 
     async def logout(self, refresh_token_str: str) -> dict:
         await self.repo.revoke_refresh_token(refresh_token_str)
@@ -131,7 +143,9 @@ class AuthService:
             for org, role in rows
         ]
 
-    async def create_organization(self, user_id: str, user_email: str, payload: OrgCreateRequest) -> OrgResponse:
+    async def create_organization(
+        self, user_id: str, user_email: str, payload: OrgCreateRequest
+    ) -> OrgResponse:
         org = await self.repo.create_organization(name=payload.name, slug=payload.slug)
         org.trial_ends_at = datetime.now(UTC) + timedelta(days=30)
         org.is_trial_used = True
@@ -159,7 +173,21 @@ class AuthService:
         """Create invite record and return (member_response, plaintext_token)."""
         existing = await self.repo.get_member_by_email(org_id=org_id, email=payload.email)
         if existing:
-            raise ConflictException(f"Email '{payload.email}' already has a pending or active membership")
+            if existing.status in {MemberStatus.ACTIVE, MemberStatus.SUSPENDED}:
+                raise ConflictException("Email already has an active or suspended membership")
+            import secrets
+
+            from src.core.security import hash_token
+
+            token = secrets.token_urlsafe(32)
+            existing.role = payload.role
+            existing.status = MemberStatus.PENDING
+            existing.invite_token = hash_token(token)
+            existing.invite_expires_at = datetime.now(UTC) + timedelta(hours=72)
+            existing.invited_by_id = inviter_id
+            await self.db.flush()
+            await self.db.refresh(existing, ["user"])
+            return OrgMemberResponse.model_validate(existing), token
 
         member = await self.repo.create_invite(
             org_id=org_id,
@@ -178,6 +206,12 @@ class AuthService:
         # Create user account if not already registered
         existing = await self.repo.get_by_email(member.email)
         if existing:
+            if not await asyncio.to_thread(
+                verify_password, payload.password, existing.hashed_password
+            ):
+                raise AuthenticationError(
+                    "Existing account password is required to accept this invite"
+                )
             user = existing
         else:
             hashed = await asyncio.to_thread(hash_password, payload.password)
@@ -192,7 +226,9 @@ class AuthService:
 
     # ── Workspaces ────────────────────────────────────────────────────────────
 
-    async def create_workspace(self, org_id: str, payload: WorkspaceCreateRequest) -> WorkspaceResponse:
+    async def create_workspace(
+        self, org_id: str, payload: WorkspaceCreateRequest
+    ) -> WorkspaceResponse:
         ws = await self.repo.create_workspace(
             org_id=org_id,
             name=payload.name,
@@ -204,6 +240,10 @@ class AuthService:
     # ── Departments ───────────────────────────────────────────────────────────
 
     async def create_department(self, org_id: str, payload: DepartmentCreate) -> DepartmentResponse:
+        if payload.head_user_id and not await self.repo.get_org_membership(
+            org_id, payload.head_user_id
+        ):
+            raise ValidationException("Department head must belong to this organization")
         dept = await self.repo.create_department(
             org_id=org_id,
             name=payload.name,
@@ -219,6 +259,16 @@ class AuthService:
     # ── Teams ─────────────────────────────────────────────────────────────────
 
     async def create_team(self, org_id: str, payload: TeamCreate) -> TeamResponse:
+        if payload.department_id:
+            from sqlalchemy import select
+            from src.models.auth import Department
+
+            if not await self.db.scalar(
+                select(Department.id).where(
+                    Department.id == payload.department_id, Department.org_id == org_id
+                )
+            ):
+                raise ValidationException("Department must belong to this organization")
         team = await self.repo.create_team(
             org_id=org_id,
             name=payload.name,
@@ -239,6 +289,11 @@ class AuthService:
         if not team:
             raise EntityNotFoundException("Team", team_id)
 
+        membership = await self.repo.get_org_membership(org_id, payload.user_id)
+        if not membership or membership.status != MemberStatus.ACTIVE:
+            raise ValidationException("Team member must be active in this organization")
+        if any(m.user_id == payload.user_id for m in team.members):
+            raise ConflictException("User is already on this team")
         tm = await self.repo.add_team_member(
             team_id=team_id, user_id=payload.user_id, role=payload.role
         )

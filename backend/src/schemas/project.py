@@ -3,7 +3,6 @@
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-
 from src.models.project import GranteeType, ProjectStatus, SprintStatus, StatusCategory
 
 
@@ -15,6 +14,7 @@ class WorkflowStatusResponse(BaseModel):
     category: StatusCategory
     color: str
     position: int
+    wip_limit: int | None = None
 
 
 class WorkflowStatusCreate(BaseModel):
@@ -22,6 +22,7 @@ class WorkflowStatusCreate(BaseModel):
     category: StatusCategory = StatusCategory.TODO
     color: str = "#6B7280"
     position: int = 0
+    wip_limit: int | None = Field(default=None, ge=1)
 
 
 class SprintResponse(BaseModel):
@@ -83,9 +84,15 @@ class ProjectAccessGrantResponse(BaseModel):
 
 
 class ProjectCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     workspace_id: str
     name: str = Field(min_length=2, max_length=255)
-    key: str = Field(min_length=2, max_length=10, description="Short identifier e.g. ENG")
+    key: str = Field(
+        min_length=2,
+        max_length=10,
+        pattern=r"^[A-Za-z][A-Za-z0-9]{1,9}$",
+        description="Short identifier e.g. ENG",
+    )
     description: str | None = None
     default_view: str = "kanban"
     color: str = "#6B7280"
@@ -128,3 +135,11 @@ class ProjectResponse(BaseModel):
     created_at: datetime
     statuses: list[WorkflowStatusResponse] = []
     sprints: list[SprintResponse] = []
+
+
+class WorkflowStatusUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    category: StatusCategory | None = None
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    position: int | None = Field(default=None, ge=0)
+    wip_limit: int | None = Field(default=None, ge=1)

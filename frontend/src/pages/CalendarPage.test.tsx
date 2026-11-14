@@ -20,7 +20,7 @@ describe("CalendarPage", () => {
     const [, monthOnMount] = spy.mock.calls[0];
 
     // The two nav buttons are prev / next; click prev to change the month.
-    const prevButton = screen.getAllByRole("button")[0];
+    const prevButton = screen.getByRole("button", {name: "Previous month"});
     fireEvent.click(prevButton);
 
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));

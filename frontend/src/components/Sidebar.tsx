@@ -9,10 +9,11 @@ import {
   Layers,
   Settings,
   ShieldCheck,
-  Plus
+  Plus,
+  Table2
 } from "lucide-react";
 
-export type ViewTab = "kanban" | "calendar" | "gantt" | "timesheets" | "settings";
+export type ViewTab = "kanban" | "calendar" | "gantt" | "timesheets" | "table" | "settings";
 
 interface SidebarProps {
   currentTab: ViewTab;
@@ -42,16 +43,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: <GitBranch className="w-4 h-4" />,
       badge: "CPM",
     },
+    {id: "table", label: "Issue table", icon: <Table2 className="w-4 h-4" />},
+    {id: "settings", label: "Workspace settings", icon: <Settings className="w-4 h-4" />},
     {
       id: "timesheets",
-      label: "Screen & Workforce Tracking",
+      label: "Time & activity",
       icon: <Activity className="w-4 h-4" />,
-      badge: "10m",
+
     },
   ];
 
   return (
-    <aside className="w-60 border-r border-slate-800 bg-slate-900/50 flex flex-col justify-between shrink-0 select-none p-3">
+    <aside className="w-16 md:w-56 border-r border-slate-800 bg-slate-900/50 flex flex-col justify-between shrink-0 select-none p-3">
       <div className="flex flex-col gap-5">
         {/* Quick Action: New Task Button */}
         <button
@@ -59,19 +62,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="w-full py-2 px-3 bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-white font-medium text-xs rounded-lg flex items-center justify-center gap-2 shadow-lg shadow-sky-500/20 transition-all hover:scale-[1.01]"
         >
           <Plus className="w-4 h-4 stroke-[2.5]" />
-          <span>New Task</span>
+          <span className="hidden md:inline">New Task</span>
         </button>
 
         {/* Navigation Section */}
         <div className="flex flex-col gap-1">
           <div className="text-[11px] uppercase tracking-wider font-semibold text-slate-500 px-2.5 mb-1">
-            Views & Management
+            <span className="hidden md:inline">Views & Management</span>
           </div>
 
           {navItems.map((item) => {
             const isActive = currentTab === item.id;
             return (
               <button
+                title={item.label}
+                aria-label={item.label}
                 key={item.id}
                 onClick={() => onSelectTab(item.id)}
                 className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
@@ -84,11 +89,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className={isActive ? "text-sky-400" : "text-slate-400"}>
                     {item.icon}
                   </span>
-                  <span>{item.label}</span>
+                  <span className="hidden md:inline">{item.label}</span>
                 </div>
 
                 {item.badge && (
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                  <span className="hidden md:inline text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
                     {item.badge}
                   </span>
                 )}
@@ -97,29 +102,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
 
-        {/* Workforce & Monitoring Highlights */}
-        <div className="p-3 rounded-xl bg-slate-800/30 border border-slate-800 flex flex-col gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
-            <Camera className="w-3.5 h-3.5 text-sky-400" />
-            <span>Desktop Companion</span>
-          </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            Running 10-minute screen sampling, activity scoring, and idle detection.
-          </p>
-          <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-            Tauri Daemon Connected
-          </div>
-        </div>
+
       </div>
 
       {/* Footer / Tenant Details */}
       <div className="pt-3 border-t border-slate-800 flex items-center justify-between px-2 text-[11px] text-slate-500">
         <div className="flex items-center gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Tenant Isolated (SaaS)</span>
+          <span className="hidden md:inline">Stride workspace</span>
         </div>
-        <span className="font-mono text-[10px]">v0.1.0</span>
+        <span className="hidden md:inline font-mono text-[10px]">v0.1.0</span>
       </div>
     </aside>
   );

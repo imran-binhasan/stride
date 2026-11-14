@@ -37,12 +37,26 @@ def get_s3_client():
     )
 
 
+@lru_cache
+def get_public_s3_client():
+    if not settings.S3_PUBLIC_ENDPOINT_URL:
+        return get_s3_client()
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.S3_PUBLIC_ENDPOINT_URL,
+        aws_access_key_id=settings.S3_ACCESS_KEY,
+        aws_secret_access_key=settings.S3_SECRET_KEY,
+        region_name=settings.S3_REGION,
+        config=Config(signature_version="s3v4"),
+    )
+
+
 def generate_presigned_put_url(s3_key: str, content_type: str, expires_in: int = 300) -> str:
     """Generate a presigned PUT URL for a direct client-to-S3 screenshot upload.
 
     This performs offline request signing (no network round-trip).
     """
-    return get_s3_client().generate_presigned_url(
+    return get_public_s3_client().generate_presigned_url(
         "put_object",
         Params={
             "Bucket": settings.S3_BUCKET_NAME,
@@ -61,3 +75,15 @@ def delete_object(s3_key: str) -> bool:
     except (BotoCoreError, ClientError) as exc:
         logger.warning("Failed to delete S3 object %s: %s", s3_key, exc)
         return False
+
+
+def generate_presigned_get_url(s3_key: str, expires_in: int = 300) -> str:
+    return get_public_s3_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.S3_BUCKET_NAME, "Key": s3_key},
+        ExpiresIn=expires_in,
+    )
+
+
+def head_object(s3_key: str) -> dict:
+    return get_s3_client().head_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)

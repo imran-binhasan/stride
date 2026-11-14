@@ -201,10 +201,10 @@ export const AIDrawer: React.FC<AIDrawerProps> = ({ projectId, onClose }) => {
               )}
 
               {activeGateTab === 5 && (
-                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-800/30 space-y-3">
+                <div className={`p-4 rounded-xl border space-y-3 ${result.gate5_execution.passed ? "bg-emerald-950/20 border-emerald-800/30" : "bg-amber-950/20 border-amber-800/30"}`}>
                   <div className="flex items-center gap-2 text-emerald-400 font-bold">
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Gate 5 Execution & Quality Verification Passed</span>
+                    <span>{result.gate5_execution.passed ? "Execution verified" : "Execution not verified"}</span>
                   </div>
                   <div className="grid grid-cols-3 gap-3">
                     <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 text-center">
@@ -217,7 +217,7 @@ export const AIDrawer: React.FC<AIDrawerProps> = ({ projectId, onClose }) => {
                     </div>
                     <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800 text-center">
                       <span className="text-slate-400">Coverage</span>
-                      <p className="text-base font-bold text-sky-400">{result.gate5_execution.coverage_percent}%</p>
+                      <p className="text-base font-bold text-sky-400">{result.gate5_execution.coverage_percent == null ? "Not measured" : `${result.gate5_execution.coverage_percent}%`}</p>
                     </div>
                   </div>
                   <p className="text-slate-300 leading-relaxed">{result.gate5_execution.summary}</p>

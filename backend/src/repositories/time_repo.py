@@ -13,15 +13,18 @@ class TimeRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def get_active_timer(self, user_id: str) -> TimeEntry | None:
+    async def get_active_timer(self, user_id: str, org_id: str | None = None) -> TimeEntry | None:
         stmt = (
             select(TimeEntry)
             .where(
                 TimeEntry.user_id == user_id,
                 TimeEntry.end_time.is_(None),
             )
+            .options(selectinload(TimeEntry.telemetries), selectinload(TimeEntry.screenshots))
             .order_by(TimeEntry.start_time.desc())
         )
+        if org_id:
+            stmt = stmt.where(TimeEntry.org_id == org_id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -53,17 +56,21 @@ class TimeRepository:
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_user_entries_for_day(self, user_id: str, target_date: date) -> list[TimeEntry]:
+    async def get_user_entries_for_day(
+        self, user_id: str, target_date: date, org_id: str | None = None
+    ) -> list[TimeEntry]:
         """Fetch all time entries for a user starting on target_date."""
         start_of_day = datetime.combine(target_date, time.min, tzinfo=UTC)
-        end_of_day = datetime.combine(target_date, time.max, tzinfo=UTC)
+        from datetime import timedelta
+
+        end_of_day = start_of_day + timedelta(days=1)
 
         stmt = (
             select(TimeEntry)
             .where(
                 TimeEntry.user_id == user_id,
-                TimeEntry.start_time >= start_of_day,
-                TimeEntry.start_time <= end_of_day,
+                TimeEntry.start_time < end_of_day,
+                (TimeEntry.end_time > start_of_day) | TimeEntry.end_time.is_(None),
             )
             .options(
                 selectinload(TimeEntry.telemetries),
@@ -71,6 +78,8 @@ class TimeRepository:
             )
             .order_by(TimeEntry.start_time.asc())
         )
+        if org_id:
+            stmt = stmt.where(TimeEntry.org_id == org_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

@@ -41,7 +41,7 @@ class TelemetryHeartbeatRequest(BaseModel):
     period_end: datetime
     keystroke_count: int = Field(ge=0)
     mouse_distance_px: int = Field(ge=0)
-    active_window_title: str | None = None
+    active_window_title: str | None = Field(default=None, max_length=255)
     is_idle: bool = False
 
 
@@ -70,7 +70,7 @@ class ScreenshotConfirmRequest(BaseModel):
     screenshot_id: str
     time_entry_id: str
     s3_key: str
-    activity_score: float = 0.0
+    activity_score: float = Field(default=0.0, ge=0, le=100)
     is_blurred: bool = False
 
 
@@ -114,3 +114,16 @@ class DailyActivitySummaryResponse(BaseModel):
     total_sessions_count: int
     total_screenshots_count: int
     ten_minute_blocks: list[TenMinuteBlockSummary] = []
+
+
+class ManualTimeEntryRequest(BaseModel):
+    task_id: str
+    start_time: datetime
+    end_time: datetime
+    is_billable: bool = True
+    notes: str | None = Field(default=None, max_length=10000)
+
+
+class TimeEntryReviewRequest(BaseModel):
+    status: TimeEntryStatus
+    reason: str | None = Field(default=None, max_length=10000)

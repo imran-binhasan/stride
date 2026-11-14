@@ -7,6 +7,8 @@ interface AuthPageProps {
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
+  const [isInvite, setIsInvite] = useState(false);
+  const [inviteToken, setInviteToken] = useState("");
   const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,7 +23,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     setLoading(true);
 
     try {
-      if (isRegister) {
+      if (isInvite) {
+        const res = await api.acceptInvite(inviteToken, fullName, password);
+        api.setAuth(res.access_token, res.refresh_token);
+      } else if (isRegister) {
         const res = await api.register({
           email,
           password,
@@ -61,7 +66,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
           <button
             type="button"
-            onClick={() => setIsRegister(false)}
+            onClick={() => {setIsRegister(false);setIsInvite(false);}}
             className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
               !isRegister ? "bg-slate-800 text-white shadow-sm" : "text-slate-500 hover:text-slate-300"
             }`}
@@ -70,7 +75,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           </button>
           <button
             type="button"
-            onClick={() => setIsRegister(true)}
+            onClick={() => {setIsRegister(true);setIsInvite(false);}}
             className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
               isRegister ? "bg-slate-800 text-white shadow-sm" : "text-slate-500 hover:text-slate-300"
             }`}
@@ -85,8 +90,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           </div>
         )}
 
+        <button className="text-xs text-sky-400" type="button" onClick={() => {setIsInvite(v => !v);setIsRegister(false);}}>Have an invitation? {isInvite ? "Return to sign in" : "Join your team"}</button>
         {/* Auth Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
+          {isInvite && <div className="space-y-3"><label className="label">Invitation token<input className="field" required value={inviteToken} onChange={e=>setInviteToken(e.target.value)}/></label><label className="label">Full name<input className="field" required minLength={2} value={fullName} onChange={e=>setFullName(e.target.value)}/></label><p className="text-xs text-slate-400">Use your existing account password if you already have an account.</p></div>}
           {isRegister && (
             <>
               <div>
@@ -127,7 +134,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
               <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
               <input
                 type="email"
-                required
+                required={!isInvite}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -156,7 +163,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
             disabled={loading}
             className="w-full py-2.5 bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-sky-500/20 flex items-center justify-center gap-2 transition-all hover:scale-[1.01] disabled:opacity-50"
           >
-            <span>{loading ? "Authenticating..." : isRegister ? "Create Account & Workspace" : "Sign In to Workspace"}</span>
+            <span>{loading ? "Authenticating..." : isInvite ? "Accept invitation" : isRegister ? "Create Account & Workspace" : "Sign In to Workspace"}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
         </form>
