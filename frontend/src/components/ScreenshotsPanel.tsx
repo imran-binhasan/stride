@@ -1,0 +1,9 @@
+import {useEffect,useState} from 'react';
+import {api} from '../services/api';
+interface Shot{id:string;download_url:string;recorded_at:string;is_blurred:boolean;}
+export function ScreenshotsPanel({entryId,canDelete,onRefresh,onClose}:{entryId:string;canDelete:boolean;onRefresh:()=>void;onClose:()=>void}){
+ const [shots,setShots]=useState<Shot[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const load=()=>api.listScreenshots<Shot[]>(entryId).then(setShots).catch(e=>setError(e.message));
+ useEffect(()=>{load();},[entryId]);
+ return <section role="dialog" aria-modal="true" aria-label="Recorded screenshots" className="fixed inset-0 z-50 bg-slate-950/95 overflow-auto p-6 space-y-5"><header className="flex justify-between"><h2 className="font-semibold">Recorded screenshots</h2><button className="btn" onClick={onClose}>Close screenshots</button></header>{error&&<p className="error" role="alert">{error}</p>}<p className="text-sm text-slate-400">Deleting a screenshot also removes the overlapping ten-minute block from your recorded time. Each block is deducted once. Submitted or approved entries must first be recalled or rejected.</p><div className="grid md:grid-cols-3 gap-4">{shots.map(s=><article className="panel space-y-3" key={s.id}><a href={s.download_url} target="_blank" rel="noreferrer"><img className="w-full rounded" src={s.download_url} alt="Recorded desktop screenshot"/></a><p>{new Date(s.recorded_at).toLocaleString()}{s.is_blurred?' · Blurred':''}</p>{canDelete&&<button className="btn" disabled={busy} onClick={async()=>{setBusy(true);setError('');try{await api.deleteScreenshot(s.id);await load();onRefresh();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>Delete screenshot and its time block</button>}</article>)}</div>{!shots.length&&<p>No screenshots for this entry.</p>}</section>;
+}

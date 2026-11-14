@@ -115,6 +115,7 @@ ROLE_PERMISSIONS: dict[OrgRole, frozenset[Permission]] = {
     ),
     OrgRole.MEMBER: frozenset(
         {
+            Permission.HR_READ,
             Permission.ORG_READ,
             Permission.PROJECT_READ,
             Permission.TASK_CREATE,
@@ -202,6 +203,7 @@ class AuthContext:
 
 
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> User:
@@ -223,6 +225,14 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if not user:
         raise AuthenticationError("User not found or account is deactivated")
+    from src.core.tenant_scope import set_tenant_scope
+
+    active = [m.org_id for m in user.memberships if m.status == MemberStatus.ACTIVE]
+    explicit = request.path_params.get("org_id") or request.headers.get("X-Org-ID")
+    if explicit and explicit not in active and not user.is_superadmin:
+        raise PermissionDeniedException("Active organization membership required")
+    selected = explicit or (payload.get("org_id") if payload.get("org_id") in active else None)
+    await set_tenant_scope(db, selected or (active[0] if active else None))
     return user
 
 
@@ -239,9 +249,11 @@ async def get_auth_context(
             is_superadmin=True,
         )
 
-    active_org_id = x_org_id
-    if not active_org_id and user.memberships:
-        active_org_id = user.memberships[0].org_id
+    active_org_id = x_org_id or db.info.get("tenant_org_id")
+    if not active_org_id:
+        active_org_id = next(
+            (m.org_id for m in user.memberships if m.status == MemberStatus.ACTIVE), None
+        )
 
     user_role: OrgRole | None = None
     if active_org_id:

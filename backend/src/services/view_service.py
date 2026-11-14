@@ -127,10 +127,19 @@ class ViewService:
                 project_id=project_id, project_duration_days=0, critical_path=[], nodes=[]
             )
 
+        from datetime import date
+
+        from src.models.task import TaskType
+
+        anchor = project.start_date or min(
+            (t.start_date for t in tasks if t.start_date), default=date.today()
+        )
         # Durations (default to 1 day or story points / 8 hours if specified)
         durations: dict[str, int] = {}
         for t in tasks:
-            if t.start_date and t.due_date:
+            if t.type == TaskType.MILESTONE:
+                durations[t.id] = 0
+            elif t.start_date and t.due_date:
                 durations[t.id] = max(1, (t.due_date - t.start_date).days + 1)
             elif t.estimated_hours:
                 durations[t.id] = max(1, int(round(t.estimated_hours / 8.0)))
@@ -182,11 +191,15 @@ class ViewService:
         early_start: dict[str, int] = {}
         early_finish: dict[str, int] = {}
 
+        start_dates = {task.id: task.start_date for task in tasks}
         for tid in topo_order:
             if not preds[tid]:
                 es = 0
             else:
                 es = max(early_finish.get(p_id, 0) + lag for p_id, lag in preds[tid])
+            task_start = start_dates[tid]
+            if task_start:
+                es = max(es, (task_start - anchor).days)
             early_start[tid] = es
             early_finish[tid] = es + durations[tid]
 
@@ -225,6 +238,8 @@ class ViewService:
                     id=tid,
                     short_id=t.short_id,
                     title=t.title,
+                    parent_task_id=t.parent_task_id,
+                    is_milestone=t.type == TaskType.MILESTONE,
                     duration_days=durations[tid],
                     early_start=es,
                     early_finish=ef,
@@ -238,6 +253,7 @@ class ViewService:
 
         return GanttChartResponse(
             project_id=project_id,
+            start_date=anchor,
             project_duration_days=project_duration,
             critical_path=critical_path_ids,
             nodes=nodes,

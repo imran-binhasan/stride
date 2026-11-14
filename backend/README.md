@@ -6,7 +6,7 @@ The implemented API includes organizations/workspaces/members; projects/statuses
 
 Authenticated REST requests use `Authorization: Bearer <access token>` and `X-Org-ID`. Realtime uses `/api/v1/ws/realtime?token=...&org_id=...` and verifies active membership and room access. The web app handles token rotation and organization selection.
 
-Read [core scope and verification](../docs/CORE_WORKFLOW_STATUS.md) before deployment. Full SRS features are not all implemented. AI execution results remain unverified until an isolated `AI_RUNNER_URL` is configured; returned worker results must include `execution_status: completed`, actual test counts, and optional measured coverage. Submitted Python is never executed in the API process.
+Read [implementation, verification, and production launch requirements](../docs/CORE_WORKFLOW_STATUS.md) before deployment. AI execution results remain unverified until an isolated `AI_RUNNER_URL` is configured; returned worker results must include `execution_status: completed`, actual test counts, and optional measured coverage. Submitted Python is never executed in the API process.
 
 ## Setup
 

@@ -40,7 +40,9 @@ export interface WorkflowStatus {
   wip_limit?: number | null;
 }
 
+export interface CustomFieldDefinition {key:string;name:string;type:'TEXT'|'NUMBER'|'DROPDOWN'|'DATE'|'FORMULA'|'USERS';options?:string[];formula?:string|null;}
 export interface Project {
+  custom_field_definitions?: CustomFieldDefinition[];
   id: string;
   org_id: string;
   workspace_id: string;
@@ -72,7 +74,11 @@ export interface TaskDependency {
   created_at: string;
 }
 
+export interface RecurrenceRule { frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "CRON"; interval?: number; weekdays?: number[]; until?: string | null; cron?: string | null; }
+
 export interface Task {
+  type?: "TASK"|"BUG"|"STORY"|"EPIC"|"MILESTONE";
+  recurrence?: RecurrenceRule | null;
   id: string;
   org_id: string;
   project_id: string;
@@ -133,6 +139,8 @@ export interface CalendarView {
 }
 
 export interface GanttNode {
+  parent_task_id?:string|null;
+  is_milestone?:boolean;
   id: string;
   short_id: string;
   title: string;
@@ -147,6 +155,7 @@ export interface GanttNode {
 }
 
 export interface GanttChart {
+  start_date?:string|null;
   project_id: string;
   project_duration_days: number;
   critical_path: string[];

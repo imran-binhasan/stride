@@ -197,3 +197,28 @@ async def delete_entry(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ):
     await TimeService(db).delete_entry(entry_id, ctx.org_id, ctx.user.id)
+
+
+@router.get("/screenshots")
+async def list_screenshots(
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.TIME_READ_OWN))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    time_entry_id: str,
+):
+    from src.core.exceptions import EntityNotFoundException
+    from src.core.storage import generate_presigned_get_url
+    from src.repositories.time_repo import TimeRepository
+
+    entry = await TimeRepository(db).get_by_id(time_entry_id, org_id=ctx.org_id)
+    if not entry or (
+        entry.user_id != ctx.user.id and not ctx.has_permission(Permission.TIME_READ_ALL)
+    ):
+        raise EntityNotFoundException("TimeEntry", time_entry_id)
+    return [
+        {
+            **ScreenshotResponse.model_validate(shot).model_dump(),
+            "download_url": generate_presigned_get_url(shot.s3_key),
+        }
+        for shot in entry.screenshots
+        if not shot.is_deleted
+    ]

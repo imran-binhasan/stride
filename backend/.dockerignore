@@ -1,12 +1,9 @@
 .venv
 __pycache__
-*.pyc
 .pytest_cache
 .ruff_cache
-.git
-.gitignore
 *.db
+*.sqlite3
 .env
-tests
-htmlcov
 .coverage
+htmlcov

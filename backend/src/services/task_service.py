@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.events import record_change
 from src.core.exceptions import ConflictException, EntityNotFoundException, ValidationException
 from src.models.auth import MemberStatus
-from src.models.task import DependencyType, TaskDependency
+from src.models.project import StatusCategory, WorkflowStatus
+from src.models.task import DependencyType, Task, TaskDependency
 from src.repositories.project_repo import ProjectRepository
 from src.repositories.task_repo import TaskRepository
 from src.repositories.user_repo import UserRepository
+from src.schemas.recurrence import RecurrenceRule
 from src.schemas.task import (
     CommentCreate,
     CommentResponse,
@@ -23,6 +25,7 @@ from src.schemas.task import (
     TaskResponse,
     TaskUpdate,
 )
+from src.services.recurrence_service import next_due
 
 
 class TaskService:
@@ -44,6 +47,11 @@ class TaskService:
         if not project:
             raise EntityNotFoundException("Project", payload.project_id)
 
+        from src.services.custom_field_service import validate_values
+
+        await validate_values(
+            self.db, org_id, payload.custom_fields, project.custom_field_definitions
+        )
         target_status_id = payload.status_id
         if not target_status_id:
             if not project.statuses:
@@ -58,6 +66,8 @@ class TaskService:
 
         await self._validate_links(org_id, project.id, payload.sprint_id, payload.parent_task_id)
         self._validate_dates(payload.start_date, payload.due_date)
+        if payload.recurrence and not payload.due_date:
+            raise ValidationException("Recurring tasks require a due date")
         new_counter = await self.project_repo.increment_task_counter(project.id)
         short_id = f"{project.key}-{new_counter}"
 
@@ -80,6 +90,7 @@ class TaskService:
             assignee_id=payload.assignee_id,
             is_client_ticket=payload.is_client_ticket,
             custom_fields=payload.custom_fields,
+            recurrence=payload.recurrence.model_dump(mode="json") if payload.recurrence else None,
         )
         record_change(self.db, org_id, project.id, "TASK_CREATED", task.id, creator_id)
         if payload.assignee_id:
@@ -123,6 +134,9 @@ class TaskService:
         ]
 
     async def update_task(self, task_id: str, org_id: str, payload: TaskUpdate) -> TaskResponse:
+        await self.db.execute(
+            select(Task.id).where(Task.id == task_id, Task.org_id == org_id).with_for_update()
+        )
         task = await self.task_repo.get_by_id(task_id, org_id=org_id)
         if not task:
             raise EntityNotFoundException("Task", task_id)
@@ -133,6 +147,13 @@ class TaskService:
                 raise ValidationException("Target status does not belong to this project")
         await self._validate_assignee(org_id, payload.assignee_id)
 
+        if payload.custom_fields is not None:
+            from src.services.custom_field_service import validate_values
+
+            project = await self.project_repo.get_by_id(task.project_id, org_id=org_id)
+            await validate_values(
+                self.db, org_id, payload.custom_fields, project.custom_field_definitions
+            )
         changes = payload.model_dump(exclude_unset=True)
         for required in (
             "title",
@@ -154,6 +175,12 @@ class TaskService:
         self._validate_dates(
             changes.get("start_date", task.start_date), changes.get("due_date", task.due_date)
         )
+        if changes.get("recurrence", task.recurrence) and not changes.get(
+            "due_date", task.due_date
+        ):
+            raise ValidationException("Recurring tasks require a due date")
+        if payload.recurrence is not None:
+            changes["recurrence"] = payload.recurrence.model_dump(mode="json")
         for field, value in changes.items():
             if field == "custom_fields" and value is not None:
                 task.custom_fields = {**task.custom_fields, **value}
@@ -161,11 +188,15 @@ class TaskService:
                 setattr(task, field, value)
 
         await self.db.flush()
+        await self._spawn_recurrence(task)
         record_change(self.db, org_id, task.project_id, "TASK_UPDATED", task_id)
         fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
         return TaskResponse.model_validate(fresh)
 
     async def move_task(self, task_id: str, org_id: str, payload: TaskMoveRequest) -> TaskResponse:
+        await self.db.execute(
+            select(Task.id).where(Task.id == task_id, Task.org_id == org_id).with_for_update()
+        )
         task = await self.task_repo.get_by_id(task_id, org_id=org_id)
         if not task:
             raise EntityNotFoundException("Task", task_id)
@@ -178,6 +209,7 @@ class TaskService:
         task.position = payload.new_position
         await self.db.flush()
 
+        await self._spawn_recurrence(task)
         record_change(self.db, org_id, task.project_id, "TASK_UPDATED", task_id)
         fresh = await self.task_repo.get_by_id(task_id, org_id=org_id)
         return TaskResponse.model_validate(fresh)
@@ -353,3 +385,45 @@ class TaskService:
             raise EntityNotFoundException("Dependency", dependency_id)
         await self.db.delete(dep)
         await self.db.flush()
+
+    async def _spawn_recurrence(self, task):
+        if not task.recurrence or task.recurrence_generated or not task.due_date:
+            return
+        status = await self.project_repo.get_status_by_id(task.status_id)
+        if status.category != StatusCategory.DONE:
+            return
+        rule = RecurrenceRule.model_validate(task.recurrence)
+        due = next_due(rule, task.due_date)
+        task.recurrence_generated = True
+        if due is None:
+            return
+        first = await self.db.scalar(
+            select(WorkflowStatus.id)
+            .where(
+                WorkflowStatus.project_id == task.project_id,
+                WorkflowStatus.category != StatusCategory.DONE,
+            )
+            .order_by(WorkflowStatus.position)
+            .limit(1)
+        )
+        if not first:
+            raise ValidationException("Recurrence requires an unfinished workflow status")
+        await self.create_task(
+            task.org_id,
+            task.creator_id,
+            TaskCreate(
+                project_id=task.project_id,
+                title=task.title,
+                description=task.description,
+                type=task.type,
+                status_id=first,
+                priority=task.priority,
+                story_points=task.story_points,
+                estimated_hours=task.estimated_hours,
+                start_date=task.start_date + (due - task.due_date) if task.start_date else None,
+                due_date=due,
+                assignee_id=task.assignee_id,
+                custom_fields=task.custom_fields,
+                recurrence=rule,
+            ),
+        )

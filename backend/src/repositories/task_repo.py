@@ -150,6 +150,7 @@ class TaskRepository:
         is_client_ticket: bool = False,
         position: int = 1000,
         custom_fields: dict[str, Any] | None = None,
+        recurrence: dict[str, Any] | None = None,
     ) -> Task:
         task = Task(
             org_id=org_id,
@@ -171,6 +172,7 @@ class TaskRepository:
             is_client_ticket=is_client_ticket,
             position=position,
             custom_fields=custom_fields or {},
+            recurrence=recurrence,
         )
         self.db.add(task)
         await self.db.flush()

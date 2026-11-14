@@ -24,6 +24,15 @@ from src.core.websockets import ws_manager
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan context manager for startup and shutdown events."""
+    if settings.ENVIRONMENT == "production" and "postgresql" in settings.DATABASE_URL:
+        async with async_session_factory() as session:
+            unsafe = await session.scalar(
+                text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            )
+            if unsafe:
+                raise RuntimeError(
+                    "Production API must use a non-superuser Postgres role without BYPASSRLS; use the Compose stride_app role"
+                )
     if "sqlite" in settings.DATABASE_URL:
         await init_db()
     await get_redis()

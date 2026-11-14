@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { CustomFieldSettings } from '../components/CustomFieldSettings';
 import { api } from '../services/api';
 import { MyOrg, OrgMember, OrgRole, Project, Workspace } from '../types';
 
@@ -17,6 +18,7 @@ export function SettingsPage({org, project, workspaces, canManage, onRefresh}: {
   if (!org) return <p className="p-6">Select an organization.</p>;
   return <section className="flex-1 overflow-auto p-4 md:p-6 space-y-5 max-w-5xl w-full">
     <div><h1 className="text-xl font-bold">Workspace settings</h1><p className="text-sm text-slate-400">{org.name} · {org.role.replace(/_/g, ' ').toLowerCase()}</p></div>
+    {project && canManage && <CustomFieldSettings project={project} onRefresh={onRefresh} />}
     {error && <p className="error" role="alert">{error}</p>}{notice && <p className="text-sm text-emerald-400" role="status">{notice}</p>}
     {canManage && <div className="grid gap-5 lg:grid-cols-2"><form className="panel space-y-3" onSubmit={e => {const {values, element} = form(e); run(async () => {await api.createProject({workspace_id: String(values.get('workspace')), name: String(values.get('name')), key: String(values.get('key'))}); element.reset();});}}>
       <h2 className="font-semibold">New project</h2><label className="label">Name<input name="name" required minLength={2} className="field" placeholder="Customer portal" /></label><label className="label">Key<input name="key" required pattern="[A-Za-z][A-Za-z0-9]{1,9}" className="field" placeholder="PORTAL" /></label><label className="label">Workspace<select name="workspace" className="field">{workspaces.map(ws => <option value={ws.id} key={ws.id}>{ws.name}</option>)}</select></label><button className="btn-primary" disabled={busy || !workspaces.length}>Create project</button>

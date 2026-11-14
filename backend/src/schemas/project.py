@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 from src.models.project import GranteeType, ProjectStatus, SprintStatus, StatusCategory
+from src.schemas.custom_fields import CustomFieldDefinition
 
 
 class WorkflowStatusResponse(BaseModel):
@@ -114,7 +115,10 @@ class ProjectUpdate(BaseModel):
     client_contact_id: str | None = None
 
 
+
+
 class ProjectResponse(BaseModel):
+    custom_field_definitions: list[CustomFieldDefinition] = []
     model_config = ConfigDict(from_attributes=True)
 
     id: str

@@ -53,8 +53,11 @@ class ConnectionManager:
         self.worker_id = uuid.uuid4().hex
         # Per-org local socket ref-counts; subscribe on 0->1, unsubscribe on 1->0.
         self._org_refcounts: dict[str, int] = {}
+        self._org_ready: dict[str, asyncio.Future[None]] = {}
         # Subscription-change requests processed by the (single) listener task.
-        self._sub_queue: asyncio.Queue[tuple[str, str]] | None = None
+        self._sub_queue: asyncio.Queue[
+            tuple[str, str, asyncio.Future[None] | None]
+        ] | None = None
         self._pubsub = None
 
     async def connect(self, websocket: WebSocket, user_id: str, org_id: str) -> None:
@@ -64,7 +67,12 @@ class ConnectionManager:
             "org_id": org_id,
             "rooms": set(),
         }
-        self._retain_org(org_id)
+        try:
+            await self._retain_org(org_id)
+        except Exception:
+            await self.disconnect(websocket)
+            await websocket.close(code=1011, reason="Realtime service unavailable")
+            raise
         logger.info("WebSocket connected: user=%s org=%s", user_id, org_id)
 
     async def disconnect(self, websocket: WebSocket) -> None:
@@ -80,18 +88,24 @@ class ConnectionManager:
                 self._release_org(org_id)
         logger.info("WebSocket disconnected")
 
-    def _retain_org(self, org_id: str) -> None:
+    async def _retain_org(self, org_id: str) -> None:
         count = self._org_refcounts.get(org_id, 0) + 1
         self._org_refcounts[org_id] = count
         if count == 1 and self._sub_queue is not None:
-            self._sub_queue.put_nowait(("subscribe", org_channel(org_id)))
+            ready = asyncio.get_running_loop().create_future()
+            self._org_ready[org_id] = ready
+            self._sub_queue.put_nowait(("subscribe", org_channel(org_id), ready))
+        ready = self._org_ready.get(org_id)
+        if ready is not None:
+            await asyncio.wait_for(asyncio.shield(ready), timeout=5)
 
     def _release_org(self, org_id: str) -> None:
         count = self._org_refcounts.get(org_id, 0) - 1
         if count <= 0:
             self._org_refcounts.pop(org_id, None)
+            self._org_ready.pop(org_id, None)
             if self._sub_queue is not None:
-                self._sub_queue.put_nowait(("unsubscribe", org_channel(org_id)))
+                self._sub_queue.put_nowait(("unsubscribe", org_channel(org_id), None))
         else:
             self._org_refcounts[org_id] = count
 
@@ -163,14 +177,51 @@ class ConnectionManager:
     async def _drain_subscription_changes(self) -> None:
         assert self._sub_queue is not None and self._pubsub is not None
         while not self._sub_queue.empty():
-            op, channel = self._sub_queue.get_nowait()
+            op, channel, ready = self._sub_queue.get_nowait()
             try:
                 if op == "subscribe":
                     await self._pubsub.subscribe(channel)
+                    # Do not report a connected socket as ready until Redis has
+                    # acknowledged its org channel subscription. Otherwise an
+                    # immediate cross-worker event can race and disappear.
+                    while ready is not None and not ready.done():
+                        message = await self._pubsub.get_message(
+                            ignore_subscribe_messages=False, timeout=1.0
+                        )
+                        if not message:
+                            continue
+                        if message.get("type") == "subscribe":
+                            subscribed = message.get("channel")
+                            if subscribed == channel or subscribed == channel.encode():
+                                ready.set_result(None)
+                        elif message.get("type") == "message":
+                            await self._handle_pubsub_message(message)
                 else:
                     await self._pubsub.unsubscribe(channel)
             except Exception as e:
+                if ready is not None and not ready.done():
+                    ready.set_exception(e)
+                self._org_ready.pop(channel.removeprefix("ws:org:"), None)
                 logger.debug("Pub/sub %s %s failed: %s", op, channel, e)
+
+    async def _handle_pubsub_message(self, message: dict[str, Any]) -> None:
+        try:
+            envelope = json.loads(message["data"])
+        except (ValueError, TypeError):
+            return
+        if envelope.get("origin") == self.worker_id:
+            return
+        room_name = envelope.get("room")
+        if not room_name:
+            return
+        client_message = json.dumps(
+            {
+                "room": room_name,
+                "event": envelope.get("event", "GENERIC_EVENT"),
+                "data": envelope.get("data", {}),
+            }
+        )
+        await self._local_deliver(room_name, client_message)
 
     async def _pubsub_listener(self) -> None:
         """Single task owning all pub/sub ops: apply subscription changes, then poll messages."""
@@ -182,24 +233,7 @@ class ConnectionManager:
                 )
                 if not message or message.get("type") != "message":
                     continue
-                try:
-                    envelope = json.loads(message["data"])
-                except (ValueError, TypeError):
-                    continue
-                # Echo prevention: skip messages this worker itself published.
-                if envelope.get("origin") == self.worker_id:
-                    continue
-                room_name = envelope.get("room")
-                if not room_name:
-                    continue
-                client_message = json.dumps(
-                    {
-                        "room": room_name,
-                        "event": envelope.get("event", "GENERIC_EVENT"),
-                        "data": envelope.get("data", {}),
-                    }
-                )
-                await self._local_deliver(room_name, client_message)
+                await self._handle_pubsub_message(message)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -215,7 +249,7 @@ class ConnectionManager:
         await self._pubsub.subscribe(WS_CONTROL_CHANNEL)
         # Re-subscribe to any orgs already held (e.g. after a restart of the listener).
         for org_id in self._org_refcounts:
-            self._sub_queue.put_nowait(("subscribe", org_channel(org_id)))
+            self._sub_queue.put_nowait(("subscribe", org_channel(org_id), None))
         self.pubsub_task = asyncio.create_task(self._pubsub_listener())
 
     async def stop(self) -> None:

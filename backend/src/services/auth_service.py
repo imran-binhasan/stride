@@ -17,6 +17,7 @@ from src.core.security import (
     hash_password,
     verify_password,
 )
+from src.core.tenant_scope import set_tenant_scope
 from src.models.auth import MemberStatus, OrgRole, User
 from src.repositories.user_repo import UserRepository
 from src.schemas.auth import (
@@ -73,6 +74,7 @@ class AuthService:
             role=OrgRole.ORG_OWNER,
             status=MemberStatus.ACTIVE,
         )
+        await set_tenant_scope(self.db, org.id)
         await self.repo.create_workspace(
             org_id=org.id, name="General", description="Default Workspace"
         )
@@ -158,6 +160,7 @@ class AuthService:
             role=OrgRole.ORG_OWNER,
             status=MemberStatus.ACTIVE,
         )
+        await set_tenant_scope(self.db, org.id)
         await self.repo.create_workspace(org_id=org.id, name="General")
         return OrgResponse.model_validate(org)
 
@@ -172,6 +175,10 @@ class AuthService:
     ) -> tuple[OrgMemberResponse, str]:
         """Create invite record and return (member_response, plaintext_token)."""
         existing = await self.repo.get_member_by_email(org_id=org_id, email=payload.email)
+        from src.services.quota_service import reserve_capacity
+
+        if not existing or existing.status == MemberStatus.REMOVED:
+            await reserve_capacity(self.db, org_id, "members")
         if existing:
             if existing.status in {MemberStatus.ACTIVE, MemberStatus.SUSPENDED}:
                 raise ConflictException("Email already has an active or suspended membership")

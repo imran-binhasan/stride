@@ -296,3 +296,14 @@ class RefreshToken(Base):
     )
 
     user: Mapped[User] = relationship("User", back_populates="refresh_tokens")
+
+
+class OAuthIdentity(Base, TimestampedModel):
+    __tablename__ = "oauth_identities"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_oauth_provider_subject"),)

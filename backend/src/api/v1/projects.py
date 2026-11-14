@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
+from src.schemas.custom_fields import CustomFieldsRequest
 from src.schemas.project import (
     LabelCreate,
     LabelResponse,
@@ -258,3 +259,23 @@ async def archive_project(
     await ProjectService(db).update_project(
         project_id, ctx.org_id, ProjectUpdate(status=ProjectStatus.ARCHIVED)
     )
+
+
+
+
+@router.put("/{project_id}/fields", response_model=ProjectResponse)
+async def configure_custom_fields(
+    project_id: str,
+    payload: CustomFieldsRequest,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    from src.core.exceptions import EntityNotFoundException
+    from src.repositories.project_repo import ProjectRepository
+
+    project = await ProjectRepository(db).get_by_id(project_id, org_id=ctx.org_id)
+    if not project:
+        raise EntityNotFoundException("Project", project_id)
+    project.custom_field_definitions = [field.model_dump() for field in payload.fields]
+    await db.flush()
+    return ProjectResponse.model_validate(project)

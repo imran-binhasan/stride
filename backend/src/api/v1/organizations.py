@@ -51,6 +51,25 @@ async def list_my_organizations(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[MyOrgResponse]:
+    if user.is_superadmin:
+        from src.models.auth import Organization
+
+        rows = list(
+            await db.scalars(
+                select(Organization).order_by(Organization.created_at.desc()).limit(200)
+            )
+        )
+        return [
+            MyOrgResponse(
+                id=org.id,
+                name=org.name,
+                slug=org.slug,
+                subscription_tier=org.subscription_tier,
+                role=OrgRole.ORG_OWNER,
+                created_at=org.created_at,
+            )
+            for org in rows
+        ]
     return await AuthService(db).list_user_organizations(user.id)
 
 
@@ -217,6 +236,9 @@ async def add_existing_member(
         raise EntityNotFoundException("User", payload.email)
     if await repo.get_member_by_email(org_id, payload.email):
         raise ConflictException("User already has a membership")
+    from src.services.quota_service import reserve_capacity
+
+    await reserve_capacity(db, org_id, "members")
     member = await repo.add_org_member(org_id, target.id, payload.role, target.email)
     member.user = target
     return OrgMemberResponse.model_validate(member)
@@ -278,6 +300,10 @@ async def update_member(
         )
         if not others:
             raise ConflictException("An organization must retain at least one active owner")
+    if member.status == MemberStatus.REMOVED and payload.status == MemberStatus.ACTIVE:
+        from src.services.quota_service import reserve_capacity
+
+        await reserve_capacity(db, org_id, "members")
     old = {"role": member.role.value, "status": member.status.value}
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is None:

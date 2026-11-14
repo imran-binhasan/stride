@@ -6,10 +6,12 @@ services:
       POSTGRES_USER: stride
       POSTGRES_PASSWORD: stride
       POSTGRES_DB: stride
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD:?Set DB_RUNTIME_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker-runtime-init.sh:/docker-entrypoint-initdb.d/10-runtime.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stride"]
       interval: 5s
@@ -20,11 +22,15 @@ services:
   pgbouncer:
     image: edoburu/pgbouncer:latest
     environment:
+      AUTH_TYPE: scram-sha-256
+      LISTEN_PORT: "6432"
       DB_HOST: db
-      DB_USER: stride
-      DB_PASSWORD: stride
+      DB_USER: stride_app
+      DB_PASSWORD: ${DB_RUNTIME_PASSWORD:?Set DB_RUNTIME_PASSWORD}
       DB_NAME: stride
       POOL_MODE: transaction
+      SERVER_RESET_QUERY: DISCARD ALL
+      SERVER_RESET_QUERY_ALWAYS: "1"
       MAX_CLIENT_CONN: "1000"
       DEFAULT_POOL_SIZE: "25"
     depends_on:
@@ -44,7 +50,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
@@ -55,13 +61,13 @@ services:
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD-SHELL", 'mc alias set health http://localhost:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null && mc ready health']
+      test: ["CMD-SHELL", 'mcli alias set health http://localhost:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null && mcli ready health']
       interval: 5s
       timeout: 5s
       retries: 5
 
   storage-init:
-    image: minio/mc:latest
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
     depends_on:
       minio:
         condition: service_healthy
@@ -70,12 +76,12 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - 'mc alias set stride http://minio:9000 "$${S3_ACCESS_KEY}" "$${S3_SECRET_KEY}" && mc mb --ignore-existing stride/stride-storage'
+      - 'mcli alias set stride http://minio:9000 "$${S3_ACCESS_KEY}" "$${S3_SECRET_KEY}" && mcli mb --ignore-existing stride/stride-storage'
 
   # One-shot migration runner — completes before the API starts (safe for multi-replica).
   migrate:
     build: .
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    command: ["uv", "run", "--no-sync", "alembic", "upgrade", "head"]
     environment:
       # Migrations connect directly to Postgres (not through the transaction pooler).
       DATABASE_URL: postgresql+asyncpg://stride:stride@db:5432/stride
@@ -85,7 +91,14 @@ services:
 
   api:
     build: .
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     depends_on:
+      pgbouncer:
+        condition: service_started
       migrate:
         condition: service_completed_successfully
       storage-init:
@@ -96,7 +109,7 @@ services:
       ENVIRONMENT: production
       DEBUG: "false"
       # Route the app through PgBouncer; disable asyncpg prepared-statement cache for it.
-      DATABASE_URL: postgresql+asyncpg://stride:stride@pgbouncer:6432/stride
+      DATABASE_URL: postgresql+asyncpg://stride_app:${DB_RUNTIME_PASSWORD:?Set DB_RUNTIME_PASSWORD}@pgbouncer:6432/stride
       DB_DISABLE_PREPARED_CACHE: "true"
       DB_POOL_SIZE: "5"
       DB_MAX_OVERFLOW: "5"
@@ -107,6 +120,18 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Set S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?Set S3_SECRET_KEY}
       S3_BUCKET_NAME: stride-storage
+      OAUTH_PUBLIC_BASE_URL: ${OAUTH_PUBLIC_BASE_URL:-http://localhost:8000/api/v1}
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_API_TOKEN: ${GITHUB_API_TOKEN:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_STARTER: ${STRIPE_PRICE_STARTER:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE:-}
       FIGMA_API_ACCESS_TOKEN: ${FIGMA_API_ACCESS_TOKEN:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       AI_RUNNER_URL: ${AI_RUNNER_URL:-}
@@ -116,6 +141,14 @@ services:
       BACKEND_CORS_ORIGINS: '["http://localhost:3000"]'
     ports:
       - "8000:8000"
+
+  web:
+    build: ../frontend
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:8080"
 
 volumes:
   pgdata:

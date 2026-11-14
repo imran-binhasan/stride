@@ -1,0 +1,33 @@
+import {render,screen,fireEvent,waitFor} from '@testing-library/react';
+import {afterEach,expect,it,vi} from 'vitest';
+import {TablePage} from './TablePage';
+import {GanttPage} from './GanttPage';
+import {api} from '../services/api';
+import {Project,Task,GanttChart} from '../types';
+afterEach(()=>vi.restoreAllMocks());
+const project={id:'p',name:'Project',statuses:[{id:'todo',name:'To do'}],custom_field_definitions:[{key:'rate',name:'Rate',type:'NUMBER'},{key:'cost',name:'Cost',type:'FORMULA',formula:'estimated_hours*rate'}]} as Project;
+it('edits numeric custom fields while formula columns stay read-only',async()=>{
+ const task={id:'t',short_id:'P-1',title:'Ship',status_id:'todo',priority:'HIGH',estimated_hours:2,custom_fields:{rate:25,cost:50}} as unknown as Task;
+ vi.spyOn(api,'getTable').mockResolvedValue({items:[task],total:1,offset:0,limit:25});
+ const update=vi.spyOn(api,'updateTask').mockResolvedValue(task);
+ render(<TablePage project={project} revision={0} onSelectTask={()=>{}} canEdit/>);
+ const rate=await screen.findByLabelText('Rate for P-1');
+ fireEvent.change(rate,{target:{value:'30'}});fireEvent.blur(rate);
+ await waitFor(()=>expect(update).toHaveBeenCalledWith('t',{custom_fields:{rate:30}}));
+ expect(await screen.findByText('50')).toBeInTheDocument();
+ expect(screen.queryByLabelText('Cost for P-1')).not.toBeInTheDocument();
+});
+it('previews automatic scheduling before applying dates',async()=>{
+ const schedule=vi.spyOn(api,'scheduleProject').mockResolvedValue({changes:[{id:'t',short_id:'P-1',start_date:'2026-12-01',due_date:'2026-12-02'}]});
+ const chart={project_id:'p',start_date:'2026-12-01',project_duration_days:2,critical_path:['t'],nodes:[{id:'t',short_id:'P-1',title:'Ship',duration_days:2,early_start:0,early_finish:2,total_float:0,is_critical:true,dependencies_out:[]}]} as GanttChart;
+ const refresh=vi.fn();
+ render(<GanttPage project={project} gantt={chart} canManage onRefresh={refresh}/>);
+ fireEvent.change(screen.getByLabelText('Schedule from'),{target:{value:'2026-12-01'}});
+ fireEvent.click(screen.getByRole('button',{name:'Preview automatic schedule'}));
+ await screen.findByRole('button',{name:'Apply 1 date changes'});
+ expect(schedule).toHaveBeenLastCalledWith('p','2026-12-01',true);
+ expect(refresh).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'Apply 1 date changes'}));
+ await waitFor(()=>expect(schedule).toHaveBeenLastCalledWith('p','2026-12-01',false));
+ await waitFor(()=>expect(refresh).toHaveBeenCalled());
+});

@@ -73,6 +73,7 @@ class Gate4TDDResponse(BaseModel):
 class Gate5ExecutionRequest(BaseModel):
     feature_title: str
     test_module_code: str = Field(max_length=100000)
+    implementation_files: dict[str, str] = Field(default_factory=dict, max_length=30)
 
 
 class Gate5ExecutionResponse(BaseModel):

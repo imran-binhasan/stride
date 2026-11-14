@@ -41,6 +41,11 @@ async def list_employee_profiles(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.HR_READ))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[EmployeeProfileResponse]:
+    if not ctx.has_permission(Permission.HR_MANAGE):
+        from src.repositories.hr_repo import HRRepository
+
+        profile = await HRRepository(db).get_profile_by_user(ctx.org_id, ctx.user.id)
+        return [EmployeeProfileResponse.model_validate(profile)] if profile else []
     return await HRService(db).list_profiles(org_id=ctx.org_id)
 
 
@@ -50,7 +55,12 @@ async def get_employee_profile(
     ctx: Annotated[AuthContext, Depends(require_permission(Permission.HR_READ))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EmployeeProfileResponse:
-    return await HRService(db).get_profile(profile_id=profile_id, org_id=ctx.org_id)
+    profile = await HRService(db).get_profile(profile_id=profile_id, org_id=ctx.org_id)
+    if not ctx.has_permission(Permission.HR_MANAGE) and profile.user_id != ctx.user.id:
+        from src.core.exceptions import PermissionDeniedException
+
+        raise PermissionDeniedException("Employee records are private")
+    return profile
 
 
 @router.patch("/employees/{profile_id}", response_model=EmployeeProfileResponse)
@@ -92,7 +102,17 @@ async def list_leave_requests(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     status_filter: Annotated[LeaveStatus | None, Query(alias="status")] = None,
 ) -> list[LeaveRequestResponse]:
-    return await HRService(db).list_leave_requests(org_id=ctx.org_id, status=status_filter)
+    employee_id = None
+    if not ctx.has_permission(Permission.HR_MANAGE):
+        from src.repositories.hr_repo import HRRepository
+
+        profile = await HRRepository(db).get_profile_by_user(ctx.org_id, ctx.user.id)
+        if not profile:
+            return []
+        employee_id = profile.id
+    return await HRService(db).list_leave_requests(
+        org_id=ctx.org_id, employee_id=employee_id, status=status_filter
+    )
 
 
 @router.patch("/leaves/{leave_id}", response_model=LeaveRequestResponse)
@@ -125,7 +145,7 @@ async def create_payroll_run(
 
 @router.get("/payroll/runs", response_model=list[PayrollRunResponse])
 async def list_payroll_runs(
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.HR_READ))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PAYROLL_RUN))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[PayrollRunResponse]:
     return await HRService(db).list_payroll_runs(org_id=ctx.org_id)
@@ -134,7 +154,7 @@ async def list_payroll_runs(
 @router.get("/payroll/runs/{run_id}", response_model=PayrollRunResponse)
 async def get_payroll_run(
     run_id: str,
-    ctx: Annotated[AuthContext, Depends(require_permission(Permission.HR_READ))],
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PAYROLL_RUN))],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PayrollRunResponse:
     return await HRService(db).get_payroll_run(run_id=run_id, org_id=ctx.org_id)

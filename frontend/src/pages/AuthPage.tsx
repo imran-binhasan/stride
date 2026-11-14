@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Zap, Lock, Mail, User, Building, ArrowRight, ShieldCheck } from "lucide-react";
 import { api } from "../services/api";
 
@@ -7,6 +7,17 @@ interface AuthPageProps {
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
+  const [providers, setProviders] = useState<string[]>([]);
+  useEffect(() => {
+    api.oauthProviders().then(setProviders).catch(() => {});
+    const ticket = new URLSearchParams(window.location.hash.slice(1)).get('oauth_ticket');
+    if (ticket) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setLoading(true);
+      api.oauthExchange(ticket).then(tokens => {api.setAuth(tokens.access_token,tokens.refresh_token);onSuccess();})
+        .catch(e => setError(e.message)).finally(() => setLoading(false));
+    }
+  }, []);
   const [isInvite, setIsInvite] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [isRegister, setIsRegister] = useState(false);
@@ -62,6 +73,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           </p>
         </div>
 
+        {providers.length > 0 && <div className="flex gap-3">{providers.map(p => <a key={p} className="btn flex-1 text-center capitalize" href={api.oauthStart(p)}>Continue with {p}</a>)}</div>}
         {/* Tab Toggle */}
         <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
           <button

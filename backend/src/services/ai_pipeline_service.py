@@ -283,6 +283,24 @@ class AIPipelineService:
                 execution_status="not_configured",
                 summary="Syntax checked. No tests executed: configure an isolated AI_RUNNER_URL to verify generated code.",
             )
+        if not payload.implementation_files:
+            generated = await complete_json(
+                "Implement the feature as typed standalone Python modules under the generated package. "
+                "Return JSON implementation_files mapping relative .py paths to code. "
+                "Do not edit tests, use network access, or claim execution results.",
+                json.dumps({"feature": payload.feature_title, "tests": payload.test_module_code}),
+            )
+            if generated and isinstance(generated.get("implementation_files"), dict):
+                payload.implementation_files = generated["implementation_files"]
+        if (
+            sum(
+                len(k) + len(v)
+                for k, v in payload.implementation_files.items()
+                if isinstance(k, str) and isinstance(v, str)
+            )
+            > 50000
+        ):
+            raise ValidationException("Generated implementation exceeds runner input limit")
         try:
             headers = (
                 {"Authorization": f"Bearer {settings.AI_RUNNER_TOKEN}"}
@@ -302,7 +320,10 @@ class AIPipelineService:
             ):
                 raise ValueError("Runner did not return completed test results")
             result.passed = (
-                result.static_analysis_passed and result.tests_passed == result.tests_executed
+                bool(payload.implementation_files)
+                and result.static_analysis_passed
+                and result.tests_passed == result.tests_executed
+                and (result.coverage_percent or 0) >= 90
             )
             return result
         except (httpx.HTTPError, ValueError):

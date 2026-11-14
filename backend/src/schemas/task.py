@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validat
 from src.models.task import DependencyType, TaskPriority, TaskType
 from src.schemas.auth import UserProfileResponse
 from src.schemas.project import LabelResponse, WorkflowStatusResponse
+from src.schemas.recurrence import RecurrenceRule
 
 
 class CommentResponse(BaseModel):
@@ -103,6 +104,7 @@ class TaskResponse(BaseModel):
     start_date: date | None
     due_date: date | None
     position: int
+    recurrence: RecurrenceRule | None = None
     custom_fields: dict[str, Any] = {}
     is_client_ticket: bool
     creator_id: str
@@ -146,6 +148,7 @@ class TaskCreate(BaseModel):
     due_date: date | None = None
     assignee_id: str | None = None
     is_client_ticket: bool = False
+    recurrence: RecurrenceRule | None = None
     custom_fields: dict[str, Any] = {}
 
     @field_validator("title")
@@ -170,6 +173,7 @@ class TaskUpdate(BaseModel):
     due_date: date | None = None
     assignee_id: str | None = None
     is_client_ticket: bool | None = None
+    recurrence: RecurrenceRule | None = None
     custom_fields: dict[str, Any] | None = None
 
     @field_validator("title")

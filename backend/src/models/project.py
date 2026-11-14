@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import enum
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Date, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.models.base import Base, TenantScopedModel, TimestampedModel, generate_uuid
 
@@ -71,6 +71,8 @@ class Project(Base, TimestampedModel, TenantScopedModel):
     created_by_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+    custom_field_definitions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
 
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_project_org_key"),)
 

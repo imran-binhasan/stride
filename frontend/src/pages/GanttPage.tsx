@@ -1,138 +1,26 @@
-import React from "react";
-import { GanttChart, Project } from "../types";
-
-interface GanttPageProps {
-  project: Project;
-  onSelectTask?: (id: string) => void;
-  gantt: GanttChart | null;
+import {useState,PointerEvent} from 'react';
+import {GanttChart,GanttNode,Project} from '../types';
+import {api} from '../services/api';
+const dated=(start:string,offset:number)=>{const d=new Date(start+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10);};
+export function GanttPage({gantt,onSelectTask,onRefresh,canManage=false}:{project:Project;gantt:GanttChart|null;onSelectTask?:(id:string)=>void;onRefresh?:()=>void;canManage?:boolean}){
+ const [error,setError]=useState(''),[busy,setBusy]=useState(false),[scale,setScale]=useState(28),[collapsed,setCollapsed]=useState<Set<string>>(new Set());
+ const [start,setStart]=useState(new Date().toISOString().slice(0,10)),[preview,setPreview]=useState<{id:string;short_id:string;start_date:string;due_date:string}[]|null>(null);
+ if(!gantt)return <p className="p-6 text-slate-400">Loading timeline…</p>;
+ const chart=gantt;
+ const nodeMap=new Map(chart.nodes.map(n=>[n.id,n]));
+ const depth=(node:GanttNode)=>{let count=0,current=node;const seen=new Set<string>();while(current.parent_task_id&&nodeMap.has(current.parent_task_id)&&!seen.has(current.id)){seen.add(current.id);count++;current=nodeMap.get(current.parent_task_id)!;}return count;};
+ const hidden=(node:GanttNode)=>{let current=node;const seen=new Set<string>();while(current.parent_task_id&&!seen.has(current.id)){seen.add(current.id);if(collapsed.has(current.parent_task_id))return true;const parent=nodeMap.get(current.parent_task_id);if(!parent)break;current=parent;}return false;};
+ const ordered:GanttNode[]=[];const walk=(id?:string)=>{for(const n of chart.nodes.filter(n=>(n.parent_task_id||undefined)===id)){ordered.push(n);walk(n.id);}};walk();
+ const nodes=(ordered.length===chart.nodes.length?ordered:chart.nodes).filter(n=>!hidden(n));
+ const days=Math.max(14,chart.project_duration_days+2),width=days*scale,anchor=chart.start_date||start;
+ async function schedule(apply=false){setError('');setBusy(true);try{const response=await api.scheduleProject(chart.project_id,start,!apply);setPreview(apply?null:response.changes);if(apply)onRefresh?.();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ function drag(e:PointerEvent<HTMLElement>,node:GanttNode,resize=false){if(!canManage||busy)return;e.preventDefault();e.stopPropagation();const x=e.clientX;const end=async(event:globalThis.PointerEvent)=>{window.removeEventListener('pointerup',end);const delta=Math.round((event.clientX-x)/scale);if(!delta)return;setBusy(true);setError('');try{const offset=resize?node.early_start:Math.max(0,node.early_start+delta);const duration=node.is_milestone?0:resize?Math.max(1,node.duration_days+delta):node.duration_days;await api.updateTask(node.id,{start_date:dated(anchor,offset),due_date:dated(anchor,offset+Math.max(0,duration-1))});onRefresh?.();}catch(error){setError((error as Error).message);}finally{setBusy(false);}};window.addEventListener('pointerup',end,{once:true});}
+ return <section className="flex-1 overflow-auto p-6 space-y-4"><header className="flex flex-wrap justify-between gap-3"><div><h1 className="text-xl font-semibold">Gantt & critical path</h1><p className="text-sm text-slate-400">{chart.project_duration_days} days · {chart.critical_path.length} critical tasks · red = critical, diamond = milestone</p></div><label className="label">Day width<select className="field" value={scale} onChange={e=>setScale(Number(e.target.value))}>{[8,16,28,40].map(n=><option key={n} value={n}>{n}px</option>)}</select></label></header>
+ {error&&<p role="alert" className="error">{error}</p>}
+ {canManage&&<div className="panel space-y-3"><div className="flex flex-wrap gap-3 items-end"><label className="label">Schedule from<input className="field" type="date" value={start} onChange={e=>{setStart(e.target.value);setPreview(null);}}/></label><button className="btn" disabled={busy||!start} onClick={()=>schedule()}>Preview automatic schedule</button>{preview&&<button className="btn-primary" disabled={busy} onClick={()=>schedule(true)}>Apply {preview.length} date changes</button>}</div>{preview&&<div className="max-h-40 overflow-auto text-xs text-slate-400">{preview.map(p=><p key={p.id}>{p.short_id}: {p.start_date} – {p.due_date}</p>)}</div>}<p className="text-xs text-slate-400">Drag bars to move dates, or drag the right edge to extend duration. Automatic scheduling respects blocking links and lag days; completed tasks keep their dates.</p></div>}
+ <div className="overflow-auto border border-slate-800 rounded-xl"><div style={{width:width+300,minWidth:'100%',position:'relative'}}>
+ <div className="flex h-10 border-b border-slate-800"><div className="w-[300px] shrink-0 p-3 text-xs">Issue · total float</div><div style={{width,position:'relative'}}>{Array.from({length:Math.ceil(days/Math.max(1,Math.ceil(days/100)))},(_,i)=>i*Math.max(1,Math.ceil(days/100))).map(day=><span key={day} className="absolute text-[10px] text-slate-400" style={{left:day*scale}}>{dated(anchor,day).slice(5)}</span>)}</div></div>
+ <div className="relative"><svg className="absolute pointer-events-none" style={{left:300,top:0,width,height:nodes.length*64}}><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker></defs>{nodes.flatMap((n,i)=>n.dependencies_out.map(id=>{const j=nodes.findIndex(row=>row.id===id);if(j<0)return null;const x1=n.early_finish*scale,x2=nodes[j].early_start*scale;return <path key={n.id+'-'+id} d={`M${x1},${i*64+32} C${x1+18},${i*64+32} ${x2-18},${j*64+32} ${x2},${j*64+32}`} fill="none" stroke="#64748b" markerEnd="url(#arrow)"/>;}))}</svg>
+ {nodes.map(node=><div className="flex h-16 border-b border-slate-800" key={node.id}><div className="w-[300px] shrink-0 flex gap-2 items-center px-3" style={{paddingLeft:12+depth(node)*14}}>{chart.nodes.some(n=>n.parent_task_id===node.id)&&<button aria-label={`Toggle children of ${node.short_id}`} onClick={()=>setCollapsed(old=>{const next=new Set(old);if(next.has(node.id))next.delete(node.id);else next.add(node.id);return next;})}>{collapsed.has(node.id)?'▸':'▾'}</button>}<button className="text-left text-xs truncate" onClick={()=>onSelectTask?.(node.id)}><span className="text-sky-400">{node.short_id}</span> {node.title}<small className="block text-slate-500">{node.duration_days}d · {node.total_float}d float</small></button></div><div className="relative" style={{width}}><div role="button" tabIndex={0} aria-label={`Open ${node.short_id}`} onDoubleClick={()=>onSelectTask?.(node.id)} onKeyDown={e=>{if(e.key==='Enter')onSelectTask?.(node.id);}} onPointerDown={e=>drag(e,node)} className={`absolute top-5 h-6 rounded text-[10px] text-white flex items-center px-1 ${node.is_critical?'bg-red-500':'bg-sky-600'} ${canManage?'cursor-grab':''}`} style={{left:node.early_start*scale,width:node.is_milestone?16:Math.max(12,node.duration_days*scale),transform:node.is_milestone?'rotate(45deg)':undefined}}>{!node.is_milestone&&<><span className="truncate">{node.short_id}</span>{canManage&&<span className="absolute right-0 h-full w-2 cursor-ew-resize" role="separator" aria-label={`Extend ${node.short_id}`} onPointerDown={e=>drag(e,node,true)}/>}</>}</div></div></div>)}
+ </div></div></div></section>;
 }
-
-export const GanttPage: React.FC<GanttPageProps> = ({ gantt, onSelectTask }) => {
-  if (!gantt) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-slate-500">
-        Loading Gantt CPM Chart...
-      </div>
-    );
-  }
-
-  const maxDays = Math.max(gantt.project_duration_days || 1, 14);
-
-  return (
-    <div className="flex-1 flex flex-col h-full bg-slate-950 p-6 select-none overflow-y-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6 shrink-0">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-lg font-bold text-white tracking-tight">Gantt & Critical Path Engine</h1>
-            <span className="px-2 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 text-xs font-semibold">
-              Critical Path Method (CPM)
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 mt-1">
-            Total project timeline: <span className="text-white font-bold">{gantt.project_duration_days} Days</span> &bull; {gantt.critical_path.length} tasks on critical bottleneck path
-          </p>
-        </div>
-
-        {/* Legend */}
-        <div className="flex items-center gap-4 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-400">
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-red-500 shadow-sm shadow-red-500/30" />
-            <span className="text-white font-medium">Critical Path (0 Float)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-sky-500" />
-            <span>Normal Task</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded bg-slate-700" />
-            <span>Float Buffer</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Gantt Timeline Table & Visualizer */}
-      <div className="flex-1 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden flex flex-col shadow-sm">
-        {/* Timeline Day Header */}
-        <div className="flex border-b border-slate-800 bg-slate-900 px-4 py-2.5 text-xs font-bold text-slate-400">
-          <div className="w-64 shrink-0">Task & Duration</div>
-          <div className="w-24 shrink-0 text-center">Float</div>
-          <div className="flex-1 flex text-center font-mono text-[11px] text-slate-500">
-            {Array.from({ length: maxDays }).map((_, i) => (
-              <span key={i} className="flex-1">D{i + 1}</span>
-            ))}
-          </div>
-        </div>
-
-        {/* Task Rows */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-800/60 p-2">
-          {gantt.nodes.map((node) => {
-            const startPct = (node.early_start / maxDays) * 100;
-            const widthPct = Math.max(4, (node.duration_days / maxDays) * 100);
-            const floatPct = (node.total_float / maxDays) * 100;
-
-            return (
-              <div
-                key={node.id}
-                onClick={() => onSelectTask?.(node.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={e => {if(e.key === "Enter") onSelectTask?.(node.id);}}
-                className="flex items-center px-3 py-3 hover:bg-slate-800/30 transition-colors text-xs"
-              >
-                {/* Task Label */}
-                <div className="w-64 shrink-0 pr-4">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] font-bold text-sky-400">{node.short_id}</span>
-                    {node.is_critical && (
-                      <span className="w-2 h-2 rounded-full bg-red-400 shadow-sm shadow-red-400 animate-pulse" />
-                    )}
-                  </div>
-                  <p className="text-slate-200 font-medium truncate">{node.title}</p>
-                </div>
-
-                {/* Float Time */}
-                <div className="w-24 shrink-0 text-center font-mono text-xs">
-                  {node.total_float === 0 ? (
-                    <span className="text-red-400 font-bold">0d (Crit)</span>
-                  ) : (
-                    <span className="text-slate-400">+{node.total_float}d float</span>
-                  )}
-                </div>
-
-                {/* Bar Graph Visualizer */}
-                <div className="flex-1 relative h-6 bg-slate-950/60 rounded-md overflow-hidden border border-slate-800">
-                  {/* Task Bar */}
-                  <div
-                    style={{
-                      left: `${startPct}%`,
-                      width: `${widthPct}%`,
-                    }}
-                    className={`absolute top-0 bottom-0 rounded flex items-center justify-center font-mono text-[10px] font-bold text-white shadow-sm transition-all ${
-                      node.is_critical
-                        ? "bg-gradient-to-r from-red-600 to-rose-500 shadow-red-500/20"
-                        : "bg-gradient-to-r from-sky-600 to-indigo-600"
-                    }`}
-                  >
-                    {node.duration_days}d
-                  </div>
-
-                  {/* Float Buffer Extension Bar */}
-                  {node.total_float > 0 && (
-                    <div
-                      style={{
-                        left: `${startPct + widthPct}%`,
-                        width: `${floatPct}%`,
-                      }}
-                      className="absolute top-1 bottom-1 bg-slate-700/40 border-r border-dashed border-slate-500 rounded-r"
-                    />
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-};

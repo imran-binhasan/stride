@@ -1,6 +1,7 @@
 """Async Database engine, session maker and dependency injection."""
 
 from collections.abc import AsyncGenerator
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 from src.config import settings
 from src.models.base import Base
 
@@ -18,13 +20,18 @@ if "sqlite" in settings.DATABASE_URL:
     # SQLite does not support standard connection pooling parameters
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
-    engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
-    engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
-    engine_kwargs["pool_pre_ping"] = True
     if settings.DB_DISABLE_PREPARED_CACHE:
-        # asyncpg caches prepared statements, which breaks under PgBouncer transaction
-        # pooling; disabling the cache makes the app PgBouncer-compatible.
-        engine_kwargs["connect_args"] = {"statement_cache_size": 0}
+        # PgBouncer owns pooling. Both SQLAlchemy and asyncpg maintain caches.
+        engine_kwargs["poolclass"] = NullPool
+        engine_kwargs["connect_args"] = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+            "prepared_statement_name_func": lambda: f"__stride_{uuid4().hex}__",
+        }
+    else:
+        engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
+        engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
+        engine_kwargs["pool_pre_ping"] = True
 
 engine: AsyncEngine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 

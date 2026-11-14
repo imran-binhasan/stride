@@ -14,9 +14,9 @@ class EmployeeProfileCreate(BaseModel):
     job_title: str = Field(min_length=1, max_length=255)
     employment_type: EmploymentType = EmploymentType.FULL_TIME
     hire_date: date
-    work_hours_per_week: float = 40.0
-    hourly_rate: float = 0.0
-    currency: str = "USD"
+    work_hours_per_week: float = Field(default=40.0, ge=0, le=168)
+    hourly_rate: float = Field(default=0.0, ge=0, le=1000000)
+    currency: str = Field(default="USD", pattern="^[A-Z]{3}$")
 
 
 class EmployeeProfileUpdate(BaseModel):
@@ -24,9 +24,9 @@ class EmployeeProfileUpdate(BaseModel):
     manager_id: str | None = None
     job_title: str | None = None
     employment_type: EmploymentType | None = None
-    work_hours_per_week: float | None = None
-    hourly_rate: float | None = None
-    currency: str | None = None
+    work_hours_per_week: float | None = Field(default=None, ge=0, le=168)
+    hourly_rate: float | None = Field(default=None, ge=0, le=1000000)
+    currency: str | None = Field(default=None, pattern="^[A-Z]{3}$")
     termination_date: date | None = None
 
 
@@ -82,7 +82,7 @@ class LeaveRequestResponse(BaseModel):
 class PayrollRunCreate(BaseModel):
     period_start: date
     period_end: date
-    currency: str = "USD"
+    currency: str = Field(default="USD", pattern="^[A-Z]{3}$")
     notes: str | None = None
 
 

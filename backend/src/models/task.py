@@ -38,6 +38,7 @@ class TaskType(enum.StrEnum):
     BUG = "BUG"
     STORY = "STORY"
     EPIC = "EPIC"
+    MILESTONE = "MILESTONE"
 
 
 class DependencyType(enum.StrEnum):
@@ -85,6 +86,8 @@ class Task(Base, TimestampedModel, TenantScopedModel):
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=1000, nullable=False)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    recurrence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    recurrence_generated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_client_ticket: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     creator_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False

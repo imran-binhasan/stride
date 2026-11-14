@@ -13,15 +13,17 @@ import {
   Table2
 } from "lucide-react";
 
-export type ViewTab = "kanban" | "calendar" | "gantt" | "timesheets" | "table" | "settings";
+export type ViewTab = "kanban" | "calendar" | "gantt" | "timesheets" | "table" | "settings" | "workforce" | "billing" | "platform";
 
 interface SidebarProps {
+  isSuperadmin?: boolean;
   currentTab: ViewTab;
   onSelectTab: (tab: ViewTab) => void;
   onOpenCreateTask: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  isSuperadmin = false,
   currentTab,
   onSelectTab,
   onOpenCreateTask,
@@ -44,6 +46,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: "CPM",
     },
     {id: "table", label: "Issue table", icon: <Table2 className="w-4 h-4" />},
+    {id: "workforce", label: "People & payroll", icon: <Layers className="w-4 h-4" />},
+    {id: "billing", label: "Billing", icon: <ShieldCheck className="w-4 h-4" />},
     {id: "settings", label: "Workspace settings", icon: <Settings className="w-4 h-4" />},
     {
       id: "timesheets",
@@ -52,6 +56,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     },
   ];
+  const items = [...navItems];
+  if (isSuperadmin) {
+    items.push({ id: "platform", label: "Platform administration", icon: <ShieldCheck className="w-4 h-4" /> });
+  }
 
   return (
     <aside className="w-16 md:w-56 border-r border-slate-800 bg-slate-900/50 flex flex-col justify-between shrink-0 select-none p-3">
@@ -71,7 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="hidden md:inline">Views & Management</span>
           </div>
 
-          {navItems.map((item) => {
+          {items.map((item) => {
             const isActive = currentTab === item.id;
             return (
               <button

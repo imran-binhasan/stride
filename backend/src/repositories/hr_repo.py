@@ -97,6 +97,7 @@ class HRRepository:
         stmt = (
             select(PayrollRun)
             .where(PayrollRun.org_id == org_id)
+            .options(selectinload(PayrollRun.items))
             .order_by(PayrollRun.period_start.desc())
         )
         result = await self.db.execute(stmt)

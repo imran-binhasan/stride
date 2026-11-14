@@ -38,6 +38,8 @@ class CalendarViewResponse(BaseModel):
 
 
 class GanttNodeResponse(BaseModel):
+    parent_task_id: str | None = None
+    is_milestone: bool = False
     id: str
     short_id: str
     title: str
@@ -52,6 +54,7 @@ class GanttNodeResponse(BaseModel):
 
 
 class GanttChartResponse(BaseModel):
+    start_date: date | None = None
     project_id: str
     project_duration_days: int
     critical_path: list[str] = []

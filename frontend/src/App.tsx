@@ -20,6 +20,9 @@ import { api } from "./services/api";
 import { useRealtime } from "./hooks/useRealtime";
 import { X } from "lucide-react";
 import { TablePage } from "./pages/TablePage";
+import { PlatformPage } from "./pages/PlatformPage";
+import { WorkforcePage } from "./pages/WorkforcePage";
+import { BillingPage } from "./pages/BillingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { MyOrg, Workspace, OrgMember } from "./types";
 
@@ -211,6 +214,7 @@ export const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar */}
         <Sidebar
+          isSuperadmin={user?.is_superadmin}
           currentTab={currentTab}
           onSelectTab={setCurrentTab}
           onOpenCreateTask={() => currentProject ? setIsCreateTaskOpen(true) : setCurrentTab("settings")}
@@ -220,9 +224,12 @@ export const App: React.FC = () => {
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
           {error && <div role="alert" className="error m-4 flex justify-between gap-3"><span>{error}</span><button className="underline" onClick={() => refreshUserAndProjects()}>Retry</button></div>}
           {initializing && <p className="p-6 text-slate-400">Loading workspace…</p>}
-          {!initializing && !currentProject && currentTab !== "settings" && <div className="m-auto p-8 text-center space-y-3"><h1 className="text-xl font-semibold">Your next project starts here</h1><p className="text-slate-400">Create a project to organize your team’s work.</p><button className="btn-primary" onClick={() => setCurrentTab("settings")}>Open workspace settings</button></div>}
+          {!initializing && !currentProject && !(["settings","workforce","billing","platform"] as string[]).includes(currentTab) && <div className="m-auto p-8 text-center space-y-3"><h1 className="text-xl font-semibold">Your next project starts here</h1><p className="text-slate-400">Create a project to organize your team’s work.</p><button className="btn-primary" onClick={() => setCurrentTab("settings")}>Open workspace settings</button></div>}
+          {currentTab === "platform" && user?.is_superadmin && <PlatformPage />}
+          {currentTab === "workforce" && activeOrg && <WorkforcePage key={activeOrg.id} members={members} canManage={["ORG_OWNER","ORG_ADMIN"].includes(activeOrg.role)} userId={user?.id || ''} isClient={activeOrg.role==='CLIENT'} />}
+          {currentTab === "billing" && activeOrg && <BillingPage key={activeOrg.id} canManage={["ORG_OWNER","ORG_ADMIN"].includes(activeOrg.role)} />}
           {currentTab === "settings" && <SettingsPage org={activeOrg} project={currentProject} workspaces={workspaces} canManage={canManage} onRefresh={() => refreshUserAndProjects()} />}
-          {currentProject && currentTab === "table" && <TablePage key={currentProject.id} project={currentProject} onSelectTask={openTask} revision={revision} canEdit={canEdit} />}
+          {currentProject && currentTab === "table" && <TablePage members={members} key={currentProject.id} project={currentProject} onSelectTask={openTask} revision={revision} canEdit={canEdit} />}
           {currentProject && currentTab === "kanban" && (
             <KanbanPage
               canManage={canManage}
@@ -239,7 +246,7 @@ export const App: React.FC = () => {
           )}
 
           {currentProject && currentTab === "gantt" && (
-            <GanttPage project={currentProject} gantt={ganttChart} onSelectTask={async id => {try {setSelectedTask(await api.getTask(id));} catch(e) {setError((e as Error).message);}}} />
+            <GanttPage canManage={canManage} onRefresh={notifyChange} project={currentProject} gantt={ganttChart} onSelectTask={async id => {try {setSelectedTask(await api.getTask(id));} catch(e) {setError((e as Error).message);}}} />
           )}
 
           {currentProject && currentTab === "timesheets" && (

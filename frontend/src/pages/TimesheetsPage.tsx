@@ -1,8 +1,10 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { ScreenshotsPanel } from '../components/ScreenshotsPanel';
 import { api } from '../services/api';
 import { DailyActivitySummary, Project, Task, TimeEntry, OrgMember } from '../types';
 
 export function TimesheetsPage({project, canReview = false, userId = '', externalRevision = 0}: {project: Project; canReview?: boolean; userId?: string; externalRevision?: number}) {
+  const [screenshotEntry,setScreenshotEntry]=useState<TimeEntry|null>(null);
   const [team, setTeam] = useState<OrgMember[]>([]);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -24,6 +26,7 @@ export function TimesheetsPage({project, canReview = false, userId = '', externa
   const hours = (seconds: number) => `${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m`;
   return <section className="flex-1 overflow-auto p-4 md:p-6 space-y-5">
     <div className="flex flex-wrap justify-between items-center gap-3"><div><h1 className="text-xl font-bold">Time & activity</h1><p className="text-sm text-slate-400">Log work, submit timesheets, and review recorded activity.</p></div><button className="btn-primary" onClick={()=>setShowManual(v=>!v)}>Log time</button></div>
+    {screenshotEntry&&<ScreenshotsPanel entryId={screenshotEntry.id} canDelete={screenshotEntry.user_id===userId} onClose={()=>setScreenshotEntry(null)} onRefresh={()=>setRevision(v=>v+1)}/>}
     {error && <p className="error" role="alert">{error}</p>}
     {showManual && <form onSubmit={manual} className="panel grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><label className="label">Issue<select name="task" className="field" required>{tasks.map(t=><option key={t.id} value={t.id}>{t.short_id} · {t.title}</option>)}</select></label><label className="label">Start (local time)<input type="datetime-local" name="start" required className="field" /></label><label className="label">End (local time)<input type="datetime-local" name="end" required className="field" /></label><label className="label">Notes<input name="notes" className="field" /></label><label className="flex gap-2 items-center text-sm"><input type="checkbox" name="billable" defaultChecked />Billable</label><button className="btn-primary self-end" disabled={busy || !tasks.length}>Save time entry</button></form>}
     <div className="flex flex-wrap justify-between gap-3"><h2 className="font-semibold">Daily activity (UTC)</h2><input aria-label="Activity date" type="date" value={date} onChange={e=>setDate(e.target.value)} className="field w-auto" /></div>
@@ -32,6 +35,7 @@ export function TimesheetsPage({project, canReview = false, userId = '', externa
     {!report?.ten_minute_blocks.length && <p className="text-sm text-slate-500">No desktop activity samples for this date. Web timers record time; desktop activity appears when a connected tracker sends samples.</p>}
     <div className="flex justify-between gap-3 items-center"><h2 className="font-semibold">Time entries</h2>{canReview && <label className="flex gap-2 items-center text-sm text-slate-400"><input type="checkbox" checked={all} onChange={e=>{setAll(e.target.checked);setOffset(0);}} />All team members</label>}</div>
     <div className="overflow-x-auto rounded-xl border border-slate-800"><table className="w-full text-left text-sm"><thead className="bg-slate-900 text-slate-400"><tr>{['Issue / member', 'Started', 'Duration', 'Status', 'Actions'].map(h=><th className="p-3 font-medium" key={h}>{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-800">{entries.map(entry=><tr key={entry.id}><td className="p-3"><p>{tasks.find(t=>t.id===entry.task_id)?.short_id || 'Issue in another project'}</p><p className="text-xs text-slate-500">{entry.user_id === userId ? 'You' : team.find(m=>m.user?.id===entry.user_id)?.user?.full_name || 'Team member'}{entry.is_billable ? ' · Billable' : ''}</p>{entry.notes && <p className="text-xs text-slate-400">{entry.notes}</p>}</td><td className="p-3 text-slate-400 whitespace-nowrap">{new Date(entry.start_time).toLocaleString()}</td><td className="p-3">{entry.end_time ? hours(entry.total_seconds) : 'Running'}</td><td className="p-3"><span className="text-xs rounded border border-slate-700 px-2 py-1">{entry.status.toLowerCase()}</span></td><td className="p-3"><div className="flex flex-wrap gap-2">
+      <button className="btn" onClick={()=>setScreenshotEntry(entry)}>Screenshots</button>
       {entry.user_id === userId && entry.end_time && ['DRAFT','REJECTED'].includes(entry.status) && <><button className="btn" disabled={busy} onClick={()=>run(()=>api.timeEntryAction(entry.id,'submit'))}>Submit</button><button className="btn" disabled={busy} onClick={()=>run(()=>api.deleteTimeEntry(entry.id))}>Delete</button></>}
       {entry.user_id === userId && entry.status==='SUBMITTED' && <button className="btn" disabled={busy} onClick={()=>run(()=>api.timeEntryAction(entry.id,'recall'))}>Recall</button>}
       {canReview && entry.user_id!==userId && entry.status==='SUBMITTED' && <><button className="btn" disabled={busy} onClick={()=>run(()=>api.timeEntryAction(entry.id,'review',{status:'APPROVED'}))}>Approve</button><button className="btn" disabled={busy} onClick={()=>setReviewing(entry.id)}>Reject</button></>}

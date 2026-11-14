@@ -10,6 +10,7 @@ from src.core.database import async_session_factory
 from src.core.exceptions import AuthenticationError
 from src.core.rbac import AuthContext, explicit_project_ids
 from src.core.security import decode_access_token
+from src.core.tenant_scope import set_tenant_scope
 from src.core.websockets import room_authorized, ws_manager
 from src.models.auth import MemberStatus, OrgMember, OrgRole, User, Workspace
 from src.models.client import ClientContact
@@ -36,6 +37,7 @@ async def socket_identity(token, selected_org=None):
         )
         if not user or not org_id or not (member or user.is_superadmin):
             raise AuthenticationError("Active organization membership is required")
+        await set_tenant_scope(db, org_id)
         ctx = AuthContext(
             user=user,
             org_id=org_id,
@@ -71,6 +73,7 @@ async def can_join(room, ctx):
         return False
     kind, identifier = parts
     async with async_session_factory() as db:
+        await set_tenant_scope(db, ctx.org_id)
         if kind == "project":
             exists = await db.scalar(
                 select(Project.id).where(Project.id == identifier, Project.org_id == ctx.org_id)
@@ -143,8 +146,15 @@ async def websocket_endpoint(
                 } or not isinstance(msg.get("data", {}), dict):
                     await websocket.send_json({"type": "ERROR", "error": "Unsupported event"})
                 else:
+                    data = msg.get("data", {})
+                    if msg["event"] == "USER_PRESENCE":
+                        data = {
+                            "user_id": ctx.user.id,
+                            "full_name": ctx.user.full_name,
+                            "state": "away" if data.get("state") == "away" else "viewing",
+                        }
                     await ws_manager.broadcast_to_room(
-                        room, msg["event"], msg.get("data", {}), ctx.org_id, websocket
+                        room, msg["event"], data, ctx.org_id, websocket
                     )
             elif action == "leave_room" and isinstance(room, str):
                 ws_manager.leave_room(websocket, room)

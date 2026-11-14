@@ -1,8 +1,10 @@
 """Project View Engine API endpoints (Kanban, Calendar, Gantt CPM)."""
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.database import get_db_session
 from src.core.rbac import AuthContext, Permission, require_permission
@@ -53,6 +55,7 @@ async def get_table(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     sort_by: str = "position",
     descending: bool = False,
+    group_by: str | None = None,
     search: Annotated[str | None, Query(max_length=255)] = None,
     status_id: str | None = None,
     assignee_id: str | None = None,
@@ -67,7 +70,8 @@ async def get_table(
     from src.repositories.task_repo import TaskRepository
     from src.schemas.task import TaskResponse
 
-    if not await ProjectRepository(db).get_by_id(project_id, org_id=ctx.org_id):
+    project = await ProjectRepository(db).get_by_id(project_id, org_id=ctx.org_id)
+    if not project:
         from src.core.exceptions import EntityNotFoundException
 
         raise EntityNotFoundException("Project", project_id)
@@ -80,8 +84,11 @@ async def get_table(
         "updated_at",
         "story_points",
     }
-    if sort_by not in allowed:
-        raise ValidationException("Unsupported sort column")
+    sorts = sort_by.split(",")
+    if len(sorts) > 5 or any(field.lstrip("-") not in allowed for field in sorts):
+        raise ValidationException("Unsupported sort column or more than five columns")
+    if group_by and group_by not in {"status_id", "assignee_id", "priority", "sprint_id"}:
+        raise ValidationException("Unsupported grouping")
     filters = [
         Task.project_id == project_id,
         Task.org_id == ctx.org_id,
@@ -100,15 +107,16 @@ async def get_table(
                 "%" + search.replace("%", "\\%").replace("_", "\\_") + "%", escape="\\"
             )
         )
-    column = getattr(Task, sort_by)
+    ordering = []
+    if group_by:
+        ordering.append(getattr(Task, group_by).asc())
+    for field in sorts:
+        column = getattr(Task, field.lstrip("-"))
+        ordering.append(column.desc() if descending or field.startswith("-") else column.asc())
     total = await db.scalar(select(func.count()).select_from(Task).where(*filters))
     ids = list(
         await db.scalars(
-            select(Task.id)
-            .where(*filters)
-            .order_by(column.desc() if descending else column.asc(), Task.id)
-            .limit(limit)
-            .offset(offset)
+            select(Task.id).where(*filters).order_by(*ordering, Task.id).limit(limit).offset(offset)
         )
     )
     repo = TaskRepository(db)
@@ -117,6 +125,9 @@ async def get_table(
     for task_id in ids:
         task = rows[task_id]
         item = TaskResponse.model_validate(task)
+        from src.services.custom_field_service import computed_values
+
+        item.custom_fields = computed_values(task, project.custom_field_definitions)
         item.comments, item.attachments = [], []
         items.append(item)
     return {
@@ -176,3 +187,133 @@ async def export_calendar(
         media_type="text/calendar",
         headers={"Content-Disposition": 'attachment; filename="stride-calendar.ics"'},
     )
+
+
+@router.post("/calendar/{project_id}/feed")
+async def create_calendar_feed(
+    project_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.INTEGRATION_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    import hashlib
+    import json
+    import secrets
+
+    from src.config import settings
+    from src.core.exceptions import EntityNotFoundException
+    from src.core.redis import get_redis
+    from src.repositories.project_repo import ProjectRepository
+
+    if not await ProjectRepository(db).get_by_id(project_id, org_id=ctx.org_id):
+        raise EntityNotFoundException("Project", project_id)
+    redis = await get_redis()
+    owner = f"calendar:owner:{ctx.user.id}:{project_id}"
+    old = await redis.get(owner)
+    if old:
+        await redis.delete("calendar:feed:" + old)
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    await redis.set(
+        "calendar:feed:" + digest,
+        json.dumps({"org_id": ctx.org_id, "project_id": project_id, "user_id": ctx.user.id}),
+        ex=30 * 86400,
+    )
+    await redis.set(owner, digest, ex=30 * 86400)
+    return {
+        "url": f"{settings.OAUTH_PUBLIC_BASE_URL}/views/calendar/feed/{token}.ics",
+        "expires_in_seconds": 30 * 86400,
+    }
+
+
+@router.delete("/calendar/{project_id}/feed", status_code=204)
+async def revoke_calendar_feed(
+    project_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.INTEGRATION_MANAGE))],
+):
+    from src.core.redis import get_redis
+
+    redis = await get_redis()
+    owner = f"calendar:owner:{ctx.user.id}:{project_id}"
+    digest = await redis.getdel(owner)
+    if digest:
+        await redis.delete("calendar:feed:" + digest)
+
+
+@router.get("/calendar/feed/{token}.ics")
+async def subscribed_calendar(token: str, db: Annotated[AsyncSession, Depends(get_db_session)]):
+    import hashlib
+    import json
+
+    from src.core.exceptions import EntityNotFoundException
+    from src.core.redis import get_redis
+    from src.core.tenant_scope import set_tenant_scope
+    from src.models.auth import MemberStatus, OrgRole
+    from src.repositories.user_repo import UserRepository
+
+    redis = await get_redis()
+    raw = await redis.get("calendar:feed:" + hashlib.sha256(token.encode()).hexdigest())
+    if not raw:
+        raise EntityNotFoundException("Calendar feed", "expired or revoked")
+    data = json.loads(raw)
+    repo = UserRepository(db)
+    user = await repo.get_by_id(data["user_id"])
+    member = await repo.get_org_membership(data["org_id"], data["user_id"])
+    if (
+        not user
+        or not user.is_active
+        or not member
+        or member.status != MemberStatus.ACTIVE
+        or member.role == OrgRole.CLIENT
+    ):
+        raise EntityNotFoundException("Calendar feed", "access revoked")
+    await set_tenant_scope(db, data["org_id"])
+    ctx = AuthContext(user=user, org_id=data["org_id"], role=member.role)
+    result = await export_calendar(data["project_id"], ctx, db)
+    result.headers["Cache-Control"] = "private, no-store"
+    return result
+
+
+class ScheduleRequest(BaseModel):
+    start_date: date
+    preview: bool = True
+
+
+@router.post("/gantt/{project_id}/schedule")
+async def schedule_project(
+    project_id: str,
+    payload: ScheduleRequest,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.PROJECT_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+    from src.models.project import Project, StatusCategory
+    from src.schemas.task import TaskUpdate
+    from src.services.task_service import TaskService
+
+    await db.execute(
+        select(Project.id)
+        .where(Project.id == project_id, Project.org_id == ctx.org_id)
+        .with_for_update()
+    )
+    chart = await ViewService(db).get_gantt_cpm(project_id, ctx.org_id)
+    changes = []
+    for node in chart.nodes:
+        task = await TaskService(db).task_repo.get_by_id(node.id, org_id=ctx.org_id)
+        if task.status.category == StatusCategory.DONE:
+            continue
+        start = payload.start_date + timedelta(days=node.early_start)
+        end = start + timedelta(days=max(0, node.duration_days - 1))
+        changes.append(
+            {"id": node.id, "short_id": node.short_id, "start_date": start, "due_date": end}
+        )
+        if not payload.preview:
+            await TaskService(db).update_task(
+                node.id, ctx.org_id, TaskUpdate(start_date=start, due_date=end)
+            )
+    if not payload.preview:
+        project = await db.get(Project, project_id)
+        project.start_date = payload.start_date
+        await db.flush()
+    return {"project_id": project_id, "preview": payload.preview, "changes": changes}

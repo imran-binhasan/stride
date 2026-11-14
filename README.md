@@ -2,7 +2,7 @@
 
 A3Zen’s project and time-management application: a FastAPI backend, React/Vite web app, and a separate Tauri desktop companion.
 
-The **core team workflow is implemented and locally validated**. See [scope, validation, and remaining deployment checks](docs/CORE_WORKFLOW_STATUS.md). The full enterprise specification and native tracker are separate work.
+The web app, backend, native desktop companion, and enterprise workflow code are implemented and locally validated. See [implementation, verification, and production launch requirements](docs/CORE_WORKFLOW_STATUS.md). Production deployment still requires operator credentials, infrastructure, and platform signing.
 
 ## Run locally
 
@@ -42,7 +42,7 @@ npm test
 
 ## Deployment and specifications
 
-The [Compose stack](backend/docker-compose.yml) provisions Postgres, Redis, private object storage, migrations, and the API. Set the required secrets in `.env` before running it. The object-storage public endpoint must be reachable from the browser.
+The [Compose stack](backend/docker-compose.yml) provisions Postgres, Redis, private object storage, migrations, API, and web proxy. Set the required secrets in `.env` before running it. The object-storage public endpoint must be reachable from the browser. Follow the [production launch requirements](docs/CORE_WORKFLOW_STATUS.md) before deploying to users.
 
 - [Core workflow status](docs/CORE_WORKFLOW_STATUS.md)
 - [Full product specification](docs/SRS.md)

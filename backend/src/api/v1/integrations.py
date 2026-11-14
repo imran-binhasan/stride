@@ -23,6 +23,7 @@ router = APIRouter(prefix="/integrations", tags=["Integrations"])
 async def github_webhook_receiver(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    x_github_delivery: Annotated[str | None, Header(alias="X-GitHub-Delivery")] = None,
     x_github_event: Annotated[str | None, Header(alias="X-GitHub-Event")] = None,
     x_hub_signature_256: Annotated[str | None, Header(alias="X-Hub-Signature-256")] = None,
 ) -> dict:
@@ -33,9 +34,18 @@ async def github_webhook_receiver(
             raw_body, settings.GITHUB_WEBHOOK_SECRET, x_hub_signature_256
         ):
             raise HTTPException(status_code=401, detail="Invalid GitHub HMAC signature")
+    if len(raw_body) > 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Webhook is too large")
+    if x_github_delivery:
+        import uuid
+
+        try:
+            x_github_delivery = str(uuid.UUID(x_github_delivery))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid delivery identifier") from exc
     payload = await request.json()
     result = await GitHubService(db).process_webhook(
-        event_type=x_github_event or "generic", payload=payload
+        event_type=x_github_event or "generic", payload=payload, delivery_id=x_github_delivery
     )
     return {"success": True, "result": result}
 
@@ -77,3 +87,12 @@ async def list_task_figma_frames(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[FigmaLinkResponse]:
     return await FigmaService(db).list_task_figma_links(org_id=ctx.org_id, task_id=task_id)
+
+
+@router.post("/tasks/{task_id}/github/issue")
+async def publish_github_issue(
+    task_id: str,
+    ctx: Annotated[AuthContext, Depends(require_permission(Permission.INTEGRATION_MANAGE))],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    return await GitHubService(db).publish_issue(ctx.org_id, task_id)

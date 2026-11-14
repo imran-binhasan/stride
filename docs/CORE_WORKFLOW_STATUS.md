@@ -1,41 +1,40 @@
-# Core team workflow status
+# Stride implementation and release readiness
 
-Scope confirmed on 22 October 2026: finish the core team workflow before enterprise features.
+Reviewed 14 November 2026. The current branch contains the web application, API, native desktop companion, and the supporting enterprise workflows described below. This is an implementation and local validation report, not a production deployment or third-party certification.
 
 ## Implemented
 
-- Organizations and workspaces; member invitations, acceptance, suspension/reactivation, role ceilings, and last-owner protection.
-- Projects, workflow statuses and WIP warnings; sprint creation, state changes, and metrics.
-- Tasks, nested subtasks, editable dates/assignments/estimates, dependencies, checklists, comments, labels, watchers, attachments, and deletion.
-- Kanban, filtered/paginated table, monthly calendar with rescheduling/export, and Gantt/critical-path calculations.
-- Timers, manual time entries, overlap/ownership checks, submission/recall, approval/rejection, and audit records.
-- Tenant and project access checks, restricted client access, authenticated realtime rooms, and post-commit notifications.
-- GitHub incoming webhook automation and Figma links, with real thumbnails when a Figma token is configured.
-- Web screens for project/workspace creation, team invitations, sprints, WIP limits, issue editing, time entry and manager review.
-- AI responses report execution as unverified when no isolated execution worker is configured. They no longer fabricate test or coverage results.
+- Organizations, workspaces, membership roles, invitations, projects, statuses, sprints, task hierarchy, comments, checklists, labels, dependencies, attachments, watchers, and audit history.
+- Kanban, searchable/filterable/sortable/groupable tables, custom typed project fields and safe numeric formulas, calendar and revocable calendar feeds, Gantt critical paths, milestones, dependencies, and schedule preview/apply.
+- Timer tracking, manual time, approval workflows, activity screenshots, idle-time clipping, deletion, and team timesheets.
+- HR profiles, leave requests, approved-timesheet payroll calculations, guarded billing and subscription entitlements, and platform administration with audited account actions.
+- Google and GitHub OAuth with state/PKCE handling and verified-email checks; GitHub webhook automation and explicitly enabled issue publishing.
+- Tenant-scoped PostgreSQL row security, restricted runtime DB role, transaction-pooler configuration, per-project/member quotas, and recurring tasks.
+- Isolated AI job runner using resource-limited containers. AI reports only observed test and coverage results.
+- Tauri desktop companion with native timer controls, background/tray operation, activity telemetry, screenshot capture/upload, idle recovery, and session handling.
+- Compose web/API/database/Redis/object-storage stack, CI checks, Linux desktop package, and release smoke-test script.
 
-## Validation
+## Local verification
 
-- Backend: **100 passed; 85% measured coverage**. Ruff passes. The Postgres migration/schema test also passes separately against disposable Postgres 16 (101 checks total).
-- Frontend: **11 tests pass** and the production build passes.
-- Fresh SQLite and Postgres 16 migrations validate, including all mapped Postgres tables and columns. Compose configuration validates.
-- Desktop web bundle production build passes; native tracker validation remains a separate milestone.
-- Real browser/API checks pass for registration, project/task creation and editing, subtasks, checklists, comments, timers, table view, manual timesheets, submission, invitation acceptance, manager approval, calendar rescheduling and export.
-- Desktop (1440 px) and mobile (390 px) layouts inspected; no JavaScript exceptions in the browser checks.
-- CI now runs backend/frontend checks and a migration smoke test against a disposable Postgres 16 service.
+Run the checks below from a clean checkout with the listed services available. The release smoke script writes test data, so use a disposable stack/database.
 
-## Deployment checks still required
+- Backend integration suite: run with disposable PostgreSQL and S3-compatible storage using `STRIDE_TEST_POSTGRES_URL` and `STRIDE_TEST_S3_ENDPOINT`.
+- PostgreSQL RLS integration checks: exercised using the restricted runtime role against a disposable PostgreSQL instance.
+- Frontend: `npm test -- --run` and `npm run build` from `frontend/`.
+- Desktop UI: `npm test -- --run` from `desktop/`; native Rust tests and a Linux release build are run in the CI/container toolchain.
+- AI runner: build `runner/Dockerfile.sandbox`, then run `STRIDE_TEST_RUNNER=1 STRIDE_TEST_RUNNER_IMAGE=stride-runner:test uv run --extra dev pytest ../runner/test_runner.py` from `backend/`.
+- Full-stack smoke: `backend/.venv/bin/python scripts/smoke_release.py --base http://localhost:<web-port>`.
 
-Validated again on 14 November 2026. The Postgres migration/schema test passed against a disposable Docker Postgres 16 database. CI runs the same schema check. To repeat against another disposable database:
+These checks validate local application behavior. They do not establish production load capacity or validate external OAuth, Stripe, GitHub, or mail-provider accounts.
 
-```bash
-cd backend
-STRIDE_TEST_POSTGRES_URL='postgresql+asyncpg://user:password@localhost/test_database' \
-  uv run --extra dev pytest tests/integration/test_postgres_migrations.py
-```
+## Before a production launch
 
-Configure real storage credentials/public endpoint, GitHub webhook secret and repository delivery, and optional Figma credentials. Live provider delivery and real object-storage uploads were not exercised here. Apply migrations with `alembic upgrade head`; the new migration also normalizes legacy role values. The domain refactor cannot safely be downgraded automatically.
+1. Set unique production secrets from `backend/.env.example`; configure Google/GitHub OAuth redirect URIs and Stripe price IDs/webhook; provide scoped GitHub publishing credentials only if publishing is enabled.
+2. Deploy PostgreSQL with backups and restore rehearsal, Redis, and private S3-compatible storage. Set browser-reachable `S3_PUBLIC_ENDPOINT_URL`, HTTPS public URLs, bucket lifecycle/encryption, and network access controls.
+3. Terminate TLS at a reverse proxy, restrict API and database network exposure, configure allowed origins and OAuth/web base URLs, and verify health checks and log/alert collection.
+4. Apply Alembic migrations and bootstrap the first platform operator with `backend/promote_operator.py`; verify that the API uses the restricted non-superuser DB role.
+5. If AI execution is enabled, deploy the isolated runner on a dedicated host with Docker access and its own authentication token. Do not expose the Docker socket to the API container.
+6. Build, sign, and test platform-specific desktop installers on Windows and macOS. The Linux `.deb` is unsigned; notarization/signing and end-user installation flows have not been verified here.
+7. Complete a production-like restore, provider webhook, tenant-isolation, and load test at the deployment's chosen capacity before inviting users.
 
-## Separate enterprise/desktop work
-
-SSO, database-enforced RLS, recurring tasks, Google Calendar sync, advanced scheduling/reporting, billing/payroll completion, autonomous code execution infrastructure, and the native desktop tracker remain outside this milestone. Full SRS completion and production certification are not claimed.
+OAuth provider credentials, Stripe credentials, production infrastructure, signing identities, and load-test targets are environment-specific and were unavailable for this local validation. The source code and Linux build are ready to deploy after these operator steps; no external services or production environment have been provisioned by this change.

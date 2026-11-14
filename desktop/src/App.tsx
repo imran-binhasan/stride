@@ -1,270 +1,51 @@
-import React, { useEffect, useState } from "react";
-import {
-  Play,
-  Square,
-  Zap,
-  Activity,
-  Clock,
-  Camera,
-  CheckCircle2,
-  Lock,
-  Mail,
-  User,
-  ShieldCheck,
-  ChevronDown
-} from "lucide-react";
-
-interface TaskItem {
-  id: string;
-  short_id: string;
-  title: string;
-  project_name: string;
-}
-
-export const App: React.FC = () => {
-  const [token, setToken] = useState<string | null>(localStorage.getItem("stride_desktop_token"));
-  const [email, setEmail] = useState("lead@stride.io");
-  const [password, setPassword] = useState("Password12345!");
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  // Tracking State
-  const [isTracking, setIsTracking] = useState(false);
-  const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [activityScore, setActivityScore] = useState(94);
-  const [screenshotsToday, setScreenshotsToday] = useState(6);
-
-  // Mock list of assigned tasks for quick start
-  const assignedTasks: TaskItem[] = [
-    { id: "t1", short_id: "STR-101", title: "Implement OAuth2 Refresh Token Rotation", project_name: "Core Platform" },
-    { id: "t2", short_id: "STR-102", title: "Build Critical Path Method Engine", project_name: "Core Platform" },
-    { id: "t3", short_id: "STR-103", title: "Wire Up Figma Design Link Resolution", project_name: "Core Platform" },
-  ];
-
-  useEffect(() => {
-    if (!selectedTask && assignedTasks.length > 0) {
-      setSelectedTask(assignedTasks[0]);
-    }
-  }, []);
-
-  useEffect(() => {
-    let interval: any = null;
-    if (isTracking) {
-      interval = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-        // Random slight fluctuation in activity score to simulate real typing/mouse
-        if (Math.random() > 0.7) {
-          setActivityScore(Math.floor(85 + Math.random() * 15));
-        }
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isTracking]);
-
-  const formatTimer = (sec: number) => {
-    const hrs = Math.floor(sec / 3600);
-    const mins = Math.floor((sec % 3600) / 60);
-    const secs = sec % 60;
-    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoggingIn(true);
-    try {
-      const res = await fetch("http://localhost:8000/api/v1/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setToken(data.access_token);
-        localStorage.setItem("stride_desktop_token", data.access_token);
-      } else {
-        alert("Login failed. Make sure backend is running.");
-      }
-    } catch {
-      // Offline fallback token for UI demo
-      setToken("offline-token");
-      localStorage.setItem("stride_desktop_token", "offline-token");
-    } finally {
-      setIsLoggingIn(false);
-    }
-  };
-
-  const handleToggleTimer = () => {
-    setIsTracking(!isTracking);
-  };
-
-  // Login View
-  if (!token) {
-    return (
-      <div className="h-screen w-screen bg-slate-950 p-6 flex flex-col justify-between select-none">
-        <div className="space-y-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
-              <Zap className="w-4 h-4 text-white fill-white" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white tracking-tight">Stride Companion</h2>
-              <p className="text-[10px] text-slate-400">Desktop Workforce & Time Tracker</p>
-            </div>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-3 pt-2">
-            <div>
-              <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Company Email</label>
-              <div className="relative">
-                <Mail className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Password</label>
-              <div className="relative">
-                <Lock className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="w-full py-2 bg-sky-500 hover:bg-sky-400 text-white text-xs font-bold rounded-lg shadow-md shadow-sky-500/20 transition-all mt-2"
-            >
-              {isLoggingIn ? "Authenticating..." : "Connect Desktop Tracker"}
-            </button>
-          </form>
-        </div>
-
-        <div className="text-[10px] text-slate-600 text-center flex items-center justify-center gap-1">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-          <span>Unified SaaS Authentication</span>
-        </div>
-      </div>
-    );
-  }
-
-  // Active Companion Tracker View
-  return (
-    <div className="h-screen w-screen bg-slate-950 p-4 flex flex-col justify-between select-none text-slate-100">
-      {/* Header Bar */}
-      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-md bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center">
-            <Zap className="w-3.5 h-3.5 text-white fill-white" />
-          </div>
-          <span className="text-xs font-bold text-white tracking-tight">STRIDE TRACKER</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-[10px] text-slate-400 font-mono">Tauri Daemon</span>
-        </div>
-      </div>
-
-      {/* Task Picker */}
-      <div className="space-y-1.5 my-2">
-        <label className="text-[10px] uppercase font-bold text-slate-500">Active Task</label>
-        <select
-          value={selectedTask?.id || ""}
-          onChange={(e) => {
-            const t = assignedTasks.find((x) => x.id === e.target.value);
-            if (t) setSelectedTask(t);
-          }}
-          disabled={isTracking}
-          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white focus:outline-none focus:ring-1 focus:ring-sky-500 cursor-pointer disabled:opacity-60"
-        >
-          {assignedTasks.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.short_id}: {t.title}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Big Timer Display & Start/Stop Action */}
-      <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col items-center justify-center space-y-3 shadow-inner">
-        <span className="text-[11px] uppercase font-bold tracking-widest text-slate-500">
-          {isTracking ? "Session Duration" : "Ready to Track"}
-        </span>
-
-        <h1 className="text-3xl font-black font-mono tracking-wider text-white">
-          {formatTimer(elapsedSeconds)}
-        </h1>
-
-        <button
-          onClick={handleToggleTimer}
-          className={`w-full py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 ${
-            isTracking
-              ? "bg-red-600 hover:bg-red-500 text-white shadow-red-600/20"
-              : "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20"
-          }`}
-        >
-          {isTracking ? (
-            <>
-              <Square className="w-4 h-4 fill-white" />
-              <span>Stop & Save Session</span>
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4 fill-white" />
-              <span>Start Tracking Time</span>
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* Live Activity & Telemetry Status Cards */}
-      <div className="grid grid-cols-2 gap-2 my-1">
-        <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-          <span className="text-[9px] uppercase font-bold text-slate-500 flex items-center gap-1">
-            <Activity className="w-3 h-3 text-sky-400" />
-            Activity Intensity
-          </span>
-          <p className="text-xs font-bold text-sky-400 mt-1">
-            {isTracking ? `${activityScore}%` : "—"}
-          </p>
-        </div>
-
-        <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-          <span className="text-[9px] uppercase font-bold text-slate-500 flex items-center gap-1">
-            <Camera className="w-3 h-3 text-purple-400" />
-            Screenshots Today
-          </span>
-          <p className="text-xs font-bold text-purple-400 mt-1">
-            {screenshotsToday} Captured
-          </p>
-        </div>
-      </div>
-
-      {/* Footer Info */}
-      <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500">
-        <span>Runs in Background System Tray</span>
-        <button
-          onClick={() => {
-            localStorage.removeItem("stride_desktop_token");
-            setToken(null);
-          }}
-          className="hover:text-red-400"
-        >
-          Disconnect
-        </button>
-      </div>
-    </div>
-  );
+import React, {useEffect,useState} from 'react';
+import {invoke,isTauri} from '@tauri-apps/api/core';
+type Item={id:string;name:string};
+type Task={id:string;short_id:string;title:string};
+type Status={connected:boolean;entry:{id:string;task_id:string;start_time:string}|null;activity_score:number|null;screenshots:number;input_available:boolean;paused_for_idle:boolean;idle_gap?:{start_time:string;end_time:string}|null;error:string|null};
+const empty:Status={connected:false,entry:null,activity_score:null,screenshots:0,input_available:false,paused_for_idle:false,error:null};
+const call=<T,>(command:string,args?:Record<string,unknown>)=>invoke<T>(command,args);
+const read=<T,>(path:string)=>call<T>('read_api',{path});
+export const App:React.FC=()=>{
+ const [status,setStatus]=useState(empty),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [base,setBase]=useState(localStorage.getItem('stride_server')||'http://localhost:8000/api/v1');
+ const [email,setEmail]=useState(''),[password,setPassword]=useState('');
+ const [orgs,setOrgs]=useState<Item[]>([]),[org,setOrg]=useState('');
+ const [projects,setProjects]=useState<Item[]>([]),[project,setProject]=useState('');
+ const [tasks,setTasks]=useState<Task[]>([]),[task,setTask]=useState(''),[now,setNow]=useState(Date.now());
+ const [prefs,setPrefs]=useState({screenshots_enabled:false,blur:true,randomize:true,screenshot_interval_seconds:600,idle_threshold_seconds:300});
+ async function run(fn:()=>Promise<void>){setBusy(true);setError('');try{await fn();}catch(e){setError(String(e));}finally{setBusy(false);}}
+ useEffect(()=>{if(!isTauri())return;let live=true;const poll=()=>call<Status>('get_daemon_status').then(s=>{if(live)setStatus(s);}).catch(e=>{if(live)setError(String(e));});poll();const timer=setInterval(poll,2000);return()=>{live=false;clearInterval(timer);};},[]);
+ useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[]);
+ useEffect(()=>{if(!status.connected)return;let live=true;read<Item[]>('/organizations').then(o=>{if(live)setOrgs(o);}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[status.connected]);
+ async function changeOrg(id:string){await run(async()=>{const s=await call<Status>('select_organization',{orgId:id});setStatus(s);setOrg(id);setProject('');setTasks([]);setTask('');const ws=await read<Item[]>(`/organizations/${id}/workspaces`);setProjects((await Promise.all(ws.map(w=>read<Item[]>(`/projects/workspace/${w.id}`)))).flat());});}
+ async function changeProject(id:string){await run(async()=>{setProject(id);setTasks([]);setTask('');const items=await read<Task[]>(`/tasks/project/${id}`);setTasks(items);setTask(items[0]?.id||'');});}
+ const sec=status.entry?Math.max(0,Math.floor((now-new Date(status.entry.start_time).getTime())/1000)):0;
+ const duration=[Math.floor(sec/3600),Math.floor(sec/60)%60,sec%60].map(n=>String(n).padStart(2,'0')).join(':');
+ return <main className="min-h-screen bg-slate-950 text-slate-100 p-5 space-y-5"><header><h1 className="font-bold text-xl">Stride Companion</h1><p className="text-xs text-slate-400">Time and activity tracker</p></header>
+ {!isTauri()&&<p role="alert" className="text-amber-300">Open the native desktop app to connect and track time.</p>}
+ {(error||status.error)&&<p role="alert" className="text-red-300">{error||status.error}</p>}
+ {!status.connected?<form className="space-y-4" onSubmit={e=>{e.preventDefault();run(async()=>{setStatus(await call<Status>('connect',{base,email,password}));setPassword('');localStorage.setItem('stride_server',base);});}}>
+ <label>Server API URL<input className="field" type="url" required value={base} onChange={e=>setBase(e.target.value)}/></label>
+ <label>Email<input className="field" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)}/></label>
+ <label>Password<input className="field" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)}/></label>
+ <button className="btn" disabled={busy||!isTauri()}>{busy?'Connecting…':'Sign in'}</button></form>:<>
+ <label>Organization<select className="field" value={org} disabled={busy||!!status.entry} onChange={e=>changeOrg(e.target.value)}><option value="" disabled>Select organization</option>{orgs.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}</select></label>
+ <label>Project<select className="field" value={project} disabled={busy||!!status.entry} onChange={e=>changeProject(e.target.value)}><option value="" disabled>Select project</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+ <label>Task<select className="field" value={status.entry?.task_id||task} disabled={busy||!!status.entry} onChange={e=>setTask(e.target.value)}><option value="" disabled>Select task</option>{tasks.map(t=><option key={t.id} value={t.id}>{t.short_id}: {t.title}</option>)}</select></label>
+ {status.paused_for_idle&&<p role="status" className="text-amber-300">Stopped at your last input. Keep or discard the idle interval before restarting.</p>}
+ {status.idle_gap&&<div className="space-y-2"><p>{new Date(status.idle_gap.start_time).toLocaleTimeString()} – {new Date(status.idle_gap.end_time).toLocaleTimeString()}</p><button className="btn" disabled={busy} onClick={()=>run(async()=>setStatus(await call<Status>('resolve_idle',{keep:true})))}>Keep idle time as a draft entry</button><button className="btn" disabled={busy} onClick={()=>run(async()=>setStatus(await call<Status>('resolve_idle',{keep:false})))}>Discard idle time</button></div>}
+ <section className="border border-slate-800 rounded-xl p-5 space-y-4 text-center"><p>{status.entry?'Recording session':'Ready to track'}</p><p className="text-4xl font-mono" aria-label="Session duration">{duration}</p><button className="btn" disabled={busy||(!status.entry&&(!org||!task))} onClick={()=>run(async()=>setStatus(status.entry?await call<Status>('stop_tracking'):await call<Status>('start_tracking',{taskId:task})))}>{status.entry?'Stop and save':'Start timer'}</button></section>
+ <section className="grid grid-cols-2 gap-3 text-sm"><p>Activity<br/><strong>{status.activity_score===null?'No sample yet':`${status.activity_score}%`}</strong></p><p>Uploads since login<br/><strong>{status.screenshots}</strong></p></section>
+ {!status.input_available&&<p className="text-xs text-amber-300">Global input monitoring is unavailable. Grant OS input/accessibility permission or use a supported desktop session. Activity is not estimated.</p>}
+ <fieldset disabled={busy||!!status.entry} className="border border-slate-800 p-3 rounded-xl space-y-3"><legend>Capture and privacy</legend>
+ <label><input type="checkbox" checked={prefs.screenshots_enabled} onChange={e=>setPrefs({...prefs,screenshots_enabled:e.target.checked})}/> Enable screenshots</label>
+ <label><input type="checkbox" checked={prefs.blur} onChange={e=>setPrefs({...prefs,blur:e.target.checked})}/> Blur before upload</label>
+ <label><input type="checkbox" checked={prefs.randomize} onChange={e=>setPrefs({...prefs,randomize:e.target.checked})}/> Randomize capture intervals</label>
+ <label>Capture interval (minutes)<input className="field" type="number" min={1} max={60} value={prefs.screenshot_interval_seconds/60} onChange={e=>setPrefs({...prefs,screenshot_interval_seconds:Number(e.target.value)*60})}/></label>
+ <label>Idle threshold (minutes)<input className="field" type="number" min={1} max={60} value={prefs.idle_threshold_seconds/60} onChange={e=>setPrefs({...prefs,idle_threshold_seconds:Number(e.target.value)*60})}/></label>
+ <button className="btn" onClick={()=>run(()=>call('configure_tracking',{preferences:prefs}))}>Apply settings</button></fieldset>
+ <p className="text-xs text-slate-400">Only input counts and mouse distance are uploaded. Key contents and window titles are never uploaded. Closing the window keeps tracking in the tray.</p>
+ <button className="btn" disabled={busy} onClick={()=>run(async()=>{await call('disconnect');setStatus(empty);setOrg('');setProject('');})}>Stop and disconnect</button>
+ </>}</main>;
 };

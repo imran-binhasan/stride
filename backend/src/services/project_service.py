@@ -44,6 +44,9 @@ class ProjectService:
                 f"Project with key '{payload.key.upper()}' already exists in this organization"
             )
 
+        from src.services.quota_service import reserve_capacity
+
+        await reserve_capacity(self.db, org_id, "projects")
         project = await self.repo.create_project(
             org_id=org_id,
             workspace_id=payload.workspace_id,

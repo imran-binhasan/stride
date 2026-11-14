@@ -161,6 +161,10 @@ class ApiClient {
     return this.request<{access_token: string; refresh_token: string}>("/organizations/invites/accept", {method:"POST",body:JSON.stringify({token,full_name,password})});
   }
 
+  async oauthProviders(): Promise<string[]> { return this.request('/auth/oauth/providers'); }
+  oauthStart(provider: string) { return `${API_BASE}/auth/oauth/${provider}/start`; }
+  async oauthExchange(ticket: string) { return this.request<{access_token:string;refresh_token:string}>('/auth/oauth/exchange', {method:'POST',credentials:'include',body:JSON.stringify({ticket})}); }
+
   // Auth
   async login(payload: { email: string; password: string }) {
     return this.request<{ access_token: string; refresh_token: string }>("/auth/login", {
@@ -193,6 +197,8 @@ class ApiClient {
     this.clearAuth();
   }
 
+  async ensureSession(): Promise<void> { await this.request("/auth/me"); }
+
   async getMe(): Promise<UserProfile> {
     return this.request<UserProfile>("/auth/me");
   }
@@ -206,6 +212,7 @@ class ApiClient {
     return this.request<Workspace[]>(`/organizations/${orgId}/workspaces`);
   }
 
+  async configureFields(projectId: string, fields: import('../types').CustomFieldDefinition[]) { return this.request<Project>(`/projects/${projectId}/fields`,{method:'PUT',body:JSON.stringify({fields})}); }
   // Projects
   async getProject(projectId: string): Promise<Project> {
     return this.request<Project>(`/projects/${projectId}`);
@@ -290,6 +297,7 @@ class ApiClient {
     return this.request<CalendarView>(`/views/calendar/${projectId}${q}`);
   }
 
+  async scheduleProject(projectId: string, start_date: string, preview=true) { return this.request<{changes:{id:string;short_id:string;start_date:string;due_date:string}[]}>(`/views/gantt/${projectId}/schedule`,{method:'POST',body:JSON.stringify({start_date,preview})}); }
   async getGantt(projectId: string): Promise<GanttChart> {
     return this.request<GanttChart>(`/views/gantt/${projectId}`);
   }
@@ -349,6 +357,8 @@ class ApiClient {
   async addDependency(id: string, successor_id: string) { return this.request(`/tasks/${id}/dependencies`, { method: "POST", body: JSON.stringify({ successor_id }) }); }
   async removeDependency(id: string, dependencyId: string) { return this.request<void>(`/tasks/${id}/dependencies/${dependencyId}`, { method: "DELETE" }); }
   async getTable(projectId: string, params: Record<string, string> = {}) { return this.request<TableResult>(`/views/table/${projectId}?${new URLSearchParams(params)}`); }
+  async calendarFeed(projectId: string) { return this.request<{url:string}>(`/views/calendar/${projectId}/feed`,{method:'POST'}); }
+  async revokeCalendarFeed(projectId: string) { return this.request<void>(`/views/calendar/${projectId}/feed`,{method:'DELETE'}); }
   async calendarExport(projectId: string) {
     const res = await fetch(`${API_BASE}/views/calendar/${projectId}/export.ics`, { headers: { Authorization: `Bearer ${this.token}`, "X-Org-ID": this.orgId || "" } });
     if (!res.ok) throw new Error("Calendar export failed");
@@ -361,12 +371,23 @@ class ApiClient {
     return this.request<Attachment>(`/tasks/${taskId}/attachments/confirm`, { method: "POST", body: JSON.stringify({ attachment_id: reservation.attachment_id }) });
   }
   async attachmentUrl(taskId: string, id: string) { return this.request<{download_url: string}>(`/tasks/${taskId}/attachments/${id}/download-url`); }
+  async listScreenshots<T>(entryId: string): Promise<T> { return this.request(`/time-tracking/screenshots?time_entry_id=${encodeURIComponent(entryId)}`); }
+  async deleteScreenshot(id: string) { return this.request(`/time-tracking/screenshots/${id}`,{method:"DELETE"}); }
   async listTimeEntries(allMembers = false, offset = 0) { return this.request<TimeEntry[]>(`/time-tracking/entries?limit=50&offset=${offset}&all_members=${allMembers}`); }
   async manualTimeEntry(values: {task_id: string; start_time: string; end_time: string; notes?: string; is_billable: boolean}) { return this.request<TimeEntry>("/time-tracking/entries", { method: "POST", body: JSON.stringify(values) }); }
   async timeEntryAction(id: string, action: "submit" | "recall" | "review", values?: { status: string; reason?: string }) { return this.request<TimeEntry>(`/time-tracking/entries/${id}/${action}`, { method: "POST", body: JSON.stringify(values || {}) }); }
   async deleteTimeEntry(id: string) { return this.request<void>(`/time-tracking/entries/${id}`, { method: "DELETE" }); }
+  async publishGithubIssue(taskId: string) { return this.request<{url:string;number:number}>(`/integrations/tasks/${taskId}/github/issue`,{method:"POST"}); }
   async connectGithub(projectId: string, repo_owner: string, repo_name: string) { return this.request(`/integrations/projects/${projectId}/github`, { method: "POST", body: JSON.stringify({repo_owner, repo_name}) }); }
 
+  async hrGet<T>(section: 'employees' | 'leaves' | 'payroll/runs'): Promise<T> { return this.request(`/hr/${section}`); }
+  async hrCreate<T>(section: 'employees' | 'leaves' | 'payroll/runs', values: Record<string,unknown>): Promise<T> { return this.request(`/hr/${section}`, {method:'POST',body:JSON.stringify(values)}); }
+  async reviewLeave(id: string, status: string, rejection_reason?: string) { return this.request(`/hr/leaves/${id}`, {method:'PATCH',body:JSON.stringify({status,rejection_reason})}); }
+  async billingStatus<T>(): Promise<T> { return this.request('/billing'); }
+  async billingAction(action: 'checkout' | 'portal', tier?: string) { return this.request<{url:string}>(`/billing/${action}`, {method:'POST',body:JSON.stringify({tier})}); }
+
+  async platformGet<T>(section: 'summary' | 'organizations' | 'users'): Promise<T> { return this.request(`/platform/${section}`); }
+  async platformUserState(id: string, is_active: boolean, reason: string) { return this.request(`/platform/users/${id}`,{method:'PATCH',body:JSON.stringify({is_active,reason})}); }
   // AI Pipeline
   async runFullAIPipeline(projectId: string, featurePrompt: string): Promise<FullAIPipelineResponse> {
     return this.request<FullAIPipelineResponse>("/ai/pipeline/run-all", {

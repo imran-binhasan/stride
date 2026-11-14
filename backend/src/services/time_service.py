@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.config import settings
 from src.core.exceptions import (
@@ -63,6 +64,21 @@ def calculate_activity_score(keystrokes: int, mouse_px: int, is_idle: bool) -> f
     return round(min(100.0, max(0.0, combined)), 2)
 
 
+def screenshot_deleted_seconds(entry, end):
+    start = ensure_utc(entry.start_time)
+    blocks = set()
+    for shot in entry.screenshots:
+        if shot.is_deleted:
+            recorded = ensure_utc(shot.recorded_at)
+            blocks.add(
+                recorded.replace(minute=(recorded.minute // 10) * 10, second=0, microsecond=0)
+            )
+    return sum(
+        max(0, int((min(end, block + timedelta(minutes=10)) - max(start, block)).total_seconds()))
+        for block in blocks
+    )
+
+
 class TimeService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -84,13 +100,18 @@ class TimeService:
             await self._finalize_timer(active)
 
         # 2. Create new running timer
-        entry = await self.repo.create_time_entry(
-            org_id=org_id,
-            user_id=user_id,
-            task_id=task.id,
-            is_billable=payload.is_billable,
-            notes=payload.notes,
-        )
+        try:
+            entry = await self.repo.create_time_entry(
+                org_id=org_id,
+                user_id=user_id,
+                task_id=task.id,
+                is_billable=payload.is_billable,
+                notes=payload.notes,
+            )
+        except IntegrityError as exc:
+            raise ConflictException(
+                "Another timer is already running. Stop it in its organization before starting a new session."
+            ) from exc
         return TimeEntryResponse.model_validate(entry)
 
     async def stop_timer(
@@ -112,7 +133,7 @@ class TimeService:
         if payload.notes:
             entry.notes = payload.notes
 
-        await self._finalize_timer(entry)
+        await self._finalize_timer(entry, payload.idle_since)
         return TimeEntryResponse.model_validate(entry)
 
     async def get_active_timer(
@@ -123,34 +144,39 @@ class TimeService:
             return None
         return TimeEntryResponse.model_validate(entry)
 
-    async def _finalize_timer(self, entry: TimeEntry) -> None:
-        now = utc_now()
+    async def _finalize_timer(self, entry: TimeEntry, idle_since=None) -> None:
+        now = ensure_utc(idle_since) if idle_since else utc_now()
+        if now < ensure_utc(entry.start_time) or now > utc_now():
+            raise ValidationException("Timer end must fall within the active session")
         entry.end_time = now
         start_time_utc = ensure_utc(entry.start_time)
         delta_sec = int((now - start_time_utc).total_seconds())
-        deleted_seconds = 600 * sum(1 for shot in entry.screenshots if shot.is_deleted)
+        deleted_seconds = screenshot_deleted_seconds(entry, now)
         entry.total_seconds = max(0, delta_sec - deleted_seconds)
 
-        # Calculate average activity score from telemetries
-        if entry.telemetries:
-            avg_score = sum(t.activity_score for t in entry.telemetries) / len(entry.telemetries)
-            entry.idle_seconds = min(
-                entry.total_seconds,
-                sum(
-                    max(
-                        0,
-                        int(
-                            (ensure_utc(t.period_end) - ensure_utc(t.period_start)).total_seconds()
-                        ),
-                    )
-                    for t in entry.telemetries
-                    if t.is_idle
+        # Clip samples to the actual session; idle auto-pause may shorten its end.
+        samples = [
+            (
+                t,
+                max(
+                    0,
+                    (
+                        min(now, ensure_utc(t.period_end))
+                        - max(start_time_utc, ensure_utc(t.period_start))
+                    ).total_seconds(),
                 ),
             )
-            entry.activity_percent = round(avg_score, 2)
-        else:
-            entry.activity_percent = 100.0
-            entry.idle_seconds = 0
+            for t in entry.telemetries
+        ]
+        sampled = sum(seconds for _, seconds in samples)
+        entry.activity_percent = (
+            round(sum(t.activity_score * seconds for t, seconds in samples) / sampled, 2)
+            if sampled
+            else 0.0
+        )
+        entry.idle_seconds = min(
+            entry.total_seconds, int(sum(seconds for t, seconds in samples if t.is_idle))
+        )
 
         await self.db.flush()
 
@@ -303,6 +329,9 @@ class TimeService:
             raise ConflictException(
                 "Recall or reject the timesheet before deleting its screenshots"
             )
+        before_deleted = screenshot_deleted_seconds(
+            entry, ensure_utc(entry.end_time) if entry.end_time else utc_now()
+        )
         log.is_deleted = True
 
         # Best-effort removal from object storage (skipped in tests to stay offline).
@@ -310,10 +339,17 @@ class TimeService:
         if settings.ENVIRONMENT != "test":
             await asyncio.to_thread(delete_object, log.s3_key)
 
-        entry = await self.repo.get_by_id(log.time_entry_id)
-        if entry:
-            entry.total_seconds = max(0, entry.total_seconds - 600)
-            await self.db.flush()
+        after_deleted = screenshot_deleted_seconds(
+            entry, ensure_utc(entry.end_time) if entry.end_time else utc_now()
+        )
+        deduction = max(0, after_deleted - before_deleted)
+        if entry.end_time:
+            entry.total_seconds = max(
+                0,
+                int((ensure_utc(entry.end_time) - ensure_utc(entry.start_time)).total_seconds())
+                - after_deleted,
+            )
+        await self.db.flush()
 
         await NotificationService(self.db).log_audit(
             org_id=entry.org_id,
@@ -321,7 +357,7 @@ class TimeService:
             action="screenshot.deleted",
             resource_type="screenshot",
             resource_id=screenshot_id,
-            new_values={"deducted_seconds": 600},
+            new_values={"deducted_seconds": deduction},
         )
         return {"success": True, "message": "Screenshot deleted and up to 10 minutes deducted"}
 

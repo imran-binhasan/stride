@@ -37,3 +37,9 @@ src-tauri/target/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Tauri-generated schemas
+desktop/src-tauri/gen/
+
+# Local release artifacts
+artifacts/

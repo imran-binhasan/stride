@@ -51,9 +51,12 @@ export function useRealtime(room: string | null, onEvent: (msg: RealtimeMessage)
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = async (event) => {
         if(!closed) setConnected(false);
         clearInterval(pingTimer);
+        if (!closed && event.code === 4001) {
+          try { await api.ensureSession(); } catch { return; }
+        }
         if (!closed) reconnectTimer = setTimeout(connect, 2000);
       };
 

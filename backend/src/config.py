@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # Security & JWT Config
     JWT_SECRET_KEY: str = _DEFAULT_JWT_SECRET
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # S3 Object Storage Config
@@ -67,10 +67,21 @@ class Settings(BaseSettings):
     S3_REGION: str = "us-east-1"
 
     # Integrations Config
+    OAUTH_PUBLIC_BASE_URL: str = "http://localhost:8000/api/v1"
+    WEB_BASE_URL: str = "http://localhost:3000"
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    GITHUB_API_TOKEN: str | None = None
     GITHUB_CLIENT_ID: str | None = None
     GITHUB_CLIENT_SECRET: str | None = None
     GITHUB_WEBHOOK_SECRET: str = _DEFAULT_GITHUB_WEBHOOK_SECRET
     FIGMA_API_ACCESS_TOKEN: str | None = None
+
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+    STRIPE_PRICE_STARTER: str | None = None
+    STRIPE_PRICE_PRO: str | None = None
+    STRIPE_PRICE_ENTERPRISE: str | None = None
 
     # AI Pipeline Engine Config
     AI_RUNNER_URL: str | None = None

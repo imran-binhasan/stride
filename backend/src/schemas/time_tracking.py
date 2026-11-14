@@ -13,6 +13,7 @@ class StartTimerRequest(BaseModel):
 
 
 class StopTimerRequest(BaseModel):
+    idle_since: datetime | None = None
     time_entry_id: str | None = None  # If omitted, stops any active timer for user
     notes: str | None = None
 
